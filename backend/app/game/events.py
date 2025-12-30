@@ -12,7 +12,24 @@ def register_events(sio: socketio.AsyncServer, game_manager: GameManager):
     @sio.event
     async def disconnect(sid):
         print(f"Client disconnected: {sid}")
-        # TODO: Clean up player from any rooms they were in
+        result = game_manager.disconnect_player(sid)
+        if result is None:
+            return
+
+        room_id = result["room_id"]
+
+        await sio.emit(
+            "player_left",
+            {"player_id": result["player_id"], "player_name": result["player_name"]},
+            room=room_id,
+        )
+
+        if "new_host_id" in result:
+            await sio.emit(
+                "host_changed",
+                {"new_host_id": result["new_host_id"]},
+                room=room_id,
+            )
 
     @sio.event
     async def create_room(sid):

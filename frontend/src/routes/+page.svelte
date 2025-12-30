@@ -34,6 +34,29 @@
 			});
 		});
 
+		s.on('player_left', (data: { player_id: string; player_name: string }) => {
+			gameState.update((state) => {
+				if (!state) return state;
+				return {
+					...state,
+					players: state.players.filter((p) => p.id !== data.player_id)
+				};
+			});
+		});
+
+		s.on('host_changed', (data: { new_host_id: string }) => {
+			gameState.update((state) => {
+				if (!state) return state;
+				return {
+					...state,
+					players: state.players.map((p) => ({
+						...p,
+						is_host: p.id === data.new_host_id
+					}))
+				};
+			});
+		});
+
 		s.on('new_message', (message: ChatMessage) => {
 			messages.update((msgs) => [...msgs, message]);
 		});
@@ -45,6 +68,8 @@
 		return () => {
 			s.off('room_joined');
 			s.off('player_joined');
+			s.off('player_left');
+			s.off('host_changed');
 			s.off('new_message');
 			s.off('error');
 		};
