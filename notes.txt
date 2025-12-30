@@ -1,0 +1,4 @@
+Game modes:
+- Find the AIs
+- Werewolves + find the AIs (Town of Salem)
+- Inverse mode: One human among all AIs. Survive detection.
