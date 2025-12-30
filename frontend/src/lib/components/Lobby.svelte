@@ -1,7 +1,6 @@
 <script lang="ts">
-	import { gameState, playerName, currentRoom, messages } from '$lib/stores/game';
+	import { playerName } from '$lib/stores/game';
 	import { getSocket, connected } from '$lib/stores/socket';
-	import type { GameState, ChatMessage } from '$lib/stores/game';
 
 	let nameInput = $state('');
 	let roomInput = $state('');
@@ -18,8 +17,7 @@
 
 		playerName.set(nameInput.trim());
 
-		socket.emit('create_room', {}, (response: { room_id: string }) => {
-			currentRoom.set(response.room_id);
+		socket.emit('create_room', (response: { room_id: string }) => {
 			socket.emit(
 				'join_room',
 				{
@@ -59,51 +57,6 @@
 			}
 		);
 	}
-
-	$effect(() => {
-		const socket = getSocket();
-		if (!socket) return;
-
-		socket.on('room_joined', (data: { game: GameState }) => {
-			gameState.set(data.game);
-			currentRoom.set(data.game.room_id);
-			messages.set([]);
-		});
-
-		socket.on('player_joined', (data: { player_id: string; player_name: string }) => {
-			gameState.update((state) => {
-				if (!state) return state;
-				return {
-					...state,
-					players: [
-						...state.players,
-						{
-							id: data.player_id,
-							name: data.player_name,
-							player_type: 'human',
-							is_alive: true,
-							is_host: false
-						}
-					]
-				};
-			});
-		});
-
-		socket.on('new_message', (message: ChatMessage) => {
-			messages.update((msgs) => [...msgs, message]);
-		});
-
-		socket.on('error', (data: { message: string }) => {
-			error = data.message;
-		});
-
-		return () => {
-			socket.off('room_joined');
-			socket.off('player_joined');
-			socket.off('new_message');
-			socket.off('error');
-		};
-	});
 </script>
 
 <div class="lobby">
