@@ -87,3 +87,53 @@ Always ensure the user understands the code before moving on.
 - After fixing a bug
 - After refactoring
 - Before starting something risky (so we can rollback)
+
+## MCP
+
+### Svelte
+
+You are able to use the Svelte MCP server, where you have access to comprehensive Svelte 5 and SvelteKit documentation. Here's how to use the available tools effectively:
+
+#### Available MCP Tools:
+
+#### 1. list-sections
+
+Use this FIRST to discover all available documentation sections. Returns a structured list with titles, use_cases, and paths.
+When asked about Svelte or SvelteKit topics, ALWAYS use this tool at the start of the chat to find relevant sections.
+
+#### 2. get-documentation
+
+Retrieves full documentation content for specific sections. Accepts single or multiple sections.
+After calling the list-sections tool, you MUST analyze the returned documentation sections (especially the use_cases field) and then use the get-documentation tool to fetch ALL documentation sections that are relevant for the user's task.
+
+#### 3. svelte-autofixer
+
+Analyzes Svelte code and returns issues and suggestions.
+You MUST use this tool whenever writing Svelte code before sending it to the user. Keep calling it until no issues or suggestions are returned.
+
+#### 4. playground-link
+
+Generates a Svelte Playground link with the provided code.
+After completing the code, ask the user if they want a playground link. Only call this tool after user confirmation and NEVER if code was written to files in their project.
+
+### Playwright
+
+Browser automation for verifying frontend changes visually and interactively.
+
+#### When to Use:
+- After making UI changes, to verify they render correctly
+- To test user interactions (clicking, typing, form submissions)
+- To debug frontend issues by inspecting the live page
+
+#### Key Tools:
+- `browser_navigate` - Go to a URL (e.g., `http://localhost:5173`)
+- `browser_snapshot` - Get accessibility tree of the page (preferred for understanding page structure)
+- `browser_take_screenshot` - Capture visual screenshot
+- `browser_click` - Click elements (use refs from snapshot)
+- `browser_type` - Type into inputs
+- `browser_console_messages` - Check for JS errors
+
+#### Best Practices:
+- Use `browser_snapshot` over screenshots when you need to interact with elements
+- Always check `browser_console_messages` for errors after navigation
+- Close the browser with `browser_close` when done testing
