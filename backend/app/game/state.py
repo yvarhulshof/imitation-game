@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass, field
 from app.models import Player, ChatMessage, GamePhase
 
@@ -9,6 +10,13 @@ class GameState:
     players: dict[str, Player] = field(default_factory=dict)
     messages: list[ChatMessage] = field(default_factory=list)
     round_number: int = 0
+    phase_ends_at: float | None = None
+    phase_duration: int = 0
+
+    def is_phase_expired(self) -> bool:
+        if self.phase_ends_at is None:
+            return False
+        return time.time() >= self.phase_ends_at
 
     def add_player(self, player: Player) -> None:
         self.players[player.id] = player
@@ -28,4 +36,6 @@ class GameState:
             "phase": self.phase.value,
             "players": self.get_player_list(),
             "round_number": self.round_number,
+            "phase_ends_at": self.phase_ends_at,
+            "phase_duration": self.phase_duration,
         }

@@ -1,7 +1,21 @@
 <script lang="ts">
 	import Chat from './Chat.svelte';
 	import PlayerList from './PlayerList.svelte';
+	import PhaseTimer from './PhaseTimer.svelte';
 	import { gameState, currentRoom } from '$lib/stores/game';
+	import { socket } from '$lib/stores/socket';
+
+	let isHost = $derived(
+		$gameState?.players.find((p) => p.id === $socket?.id)?.is_host ?? false
+	);
+
+	function startGame() {
+		$socket?.emit('start_game');
+	}
+
+	function skipToVoting() {
+		$socket?.emit('skip_to_voting');
+	}
 </script>
 
 <div class="game-container">
@@ -11,8 +25,22 @@
 			<span class="room-code">Room: {$currentRoom}</span>
 		{/if}
 		{#if $gameState}
-			<span class="phase">{$gameState.phase}</span>
+			<span class="phase">
+				{$gameState.phase}
+				{#if $gameState.phase !== 'lobby' && $gameState.phase !== 'ended'}
+					(Round {$gameState.round_number})
+				{/if}
+			</span>
+			<PhaseTimer />
 		{/if}
+		<div class="header-actions">
+			{#if isHost && $gameState?.phase === 'lobby'}
+				<button class="start-btn" onclick={startGame}>Start Game</button>
+			{/if}
+			{#if isHost && $gameState?.phase === 'day'}
+				<button class="skip-btn" onclick={skipToVoting}>Skip to Voting</button>
+			{/if}
+		</div>
 	</header>
 
 	<main>
@@ -53,12 +81,44 @@
 	}
 
 	.phase {
-		margin-left: auto;
 		text-transform: uppercase;
 		font-size: 0.9rem;
 		background-color: var(--bg-tertiary);
 		padding: 0.25rem 0.75rem;
 		border-radius: 4px;
+	}
+
+	.header-actions {
+		margin-left: auto;
+		display: flex;
+		gap: 0.5rem;
+	}
+
+	.start-btn {
+		background-color: var(--accent);
+		color: var(--bg-primary);
+		border: none;
+		padding: 0.5rem 1rem;
+		border-radius: 4px;
+		cursor: pointer;
+		font-weight: bold;
+	}
+
+	.start-btn:hover {
+		opacity: 0.9;
+	}
+
+	.skip-btn {
+		background-color: var(--bg-tertiary);
+		color: var(--text-primary);
+		border: 1px solid var(--text-secondary);
+		padding: 0.5rem 1rem;
+		border-radius: 4px;
+		cursor: pointer;
+	}
+
+	.skip-btn:hover {
+		background-color: var(--bg-secondary);
 	}
 
 	main {

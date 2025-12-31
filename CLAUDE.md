@@ -6,6 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Imitation Game is a text-based, online multiplayer social deduction game inspired by Werewolf, Mafia, and Town of Salem. The twist: some or all players are LLMs. Players must deduce both roles and which players are AI.
 
+## Work Style
+
+- **Autonomous execution**: Continue until the task is finished, then report assumptions made
+- **Minimal interruptions**: Don't ask for minor clarifications - make reasonable assumptions and note them at the end
+- **Report assumptions**: After completing a task, list any significant assumptions made during implementation
+- **Server operations**: Start/stop dev servers without asking for permission
+
 ## Tech Stack
 
 - **Backend**: Python with FastAPI + python-socketio
@@ -36,15 +43,16 @@ Frontend runs on http://localhost:5173, backend on http://localhost:8000.
 ### Backend (`backend/app/`)
 - `main.py` - FastAPI + Socket.IO server setup
 - `models.py` - Pydantic models (Player, ChatMessage, GamePhase)
-- `game/state.py` - GameState dataclass
+- `game/state.py` - GameState dataclass (includes phase timing)
 - `game/manager.py` - GameManager handles room creation, player join/leave
-- `game/events.py` - Socket.IO event handlers (connect, join_room, send_message)
+- `game/phase.py` - PhaseController manages game phase transitions and timers
+- `game/events.py` - Socket.IO event handlers (connect, join_room, send_message, start_game)
 - `ai/player.py` - AIPlayer class for LLM-controlled players
 
 ### Frontend (`frontend/src/`)
 - `lib/stores/socket.ts` - Socket.IO connection management
 - `lib/stores/game.ts` - Game state stores (Svelte stores)
-- `lib/components/` - UI components (Lobby, Game, Chat, PlayerList)
+- `lib/components/` - UI components (Lobby, Game, Chat, PlayerList, PhaseTimer)
 - `routes/+page.svelte` - Main page, switches between Lobby and Game views
 
 ### Socket Events
@@ -52,6 +60,9 @@ Frontend runs on http://localhost:5173, backend on http://localhost:8000.
 - `join_room` - Join with room_id and player_name
 - `send_message` - Send chat message to room
 - `leave_room` - Leave current room
+- `start_game` - Host starts the game (triggers phase transitions)
+- `skip_to_voting` - Host skips DAY phase to go to VOTING
+- `phase_changed` - Server broadcasts phase transitions to all players
 
 ## Game Modes (Planned)
 

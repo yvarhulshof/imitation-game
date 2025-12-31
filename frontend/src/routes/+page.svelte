@@ -1,7 +1,7 @@
 <script lang="ts">
 	import Lobby from '$lib/components/Lobby.svelte';
 	import Game from '$lib/components/Game.svelte';
-	import { currentRoom, gameState, messages } from '$lib/stores/game';
+	import { currentRoom, gameState, messages, phaseEndsAt, phaseDuration } from '$lib/stores/game';
 	import { socket } from '$lib/stores/socket';
 	import type { GameState, ChatMessage } from '$lib/stores/game';
 
@@ -61,6 +61,24 @@
 			messages.update((msgs) => [...msgs, message]);
 		});
 
+		s.on(
+			'phase_changed',
+			(data: { phase: string; duration: number; ends_at: number | null; round_number: number }) => {
+				gameState.update((state) => {
+					if (!state) return state;
+					return {
+						...state,
+						phase: data.phase as GameState['phase'],
+						round_number: data.round_number,
+						phase_ends_at: data.ends_at,
+						phase_duration: data.duration
+					};
+				});
+				phaseEndsAt.set(data.ends_at);
+				phaseDuration.set(data.duration);
+			}
+		);
+
 		s.on('error', (data: { message: string }) => {
 			console.error('Socket error:', data.message);
 		});
@@ -71,6 +89,7 @@
 			s.off('player_left');
 			s.off('host_changed');
 			s.off('new_message');
+			s.off('phase_changed');
 			s.off('error');
 		};
 	});

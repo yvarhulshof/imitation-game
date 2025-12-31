@@ -20,9 +20,13 @@ export interface GameState {
 	phase: 'lobby' | 'day' | 'night' | 'voting' | 'ended';
 	players: Player[];
 	round_number: number;
+	phase_ends_at: number | null;
+	phase_duration: number;
 }
 
 export const gameState = writable<GameState | null>(null);
 export const messages = writable<ChatMessage[]>([]);
 export const playerName = writable<string>('');
 export const currentRoom = writable<string | null>(null);
+export const phaseEndsAt = writable<number | null>(null);
+export const phaseDuration = writable<number>(0);

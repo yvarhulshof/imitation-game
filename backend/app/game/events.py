@@ -1,10 +1,15 @@
 import time
 import socketio
 from app.game.manager import GameManager
+from app.game.phase import PhaseController
 from app.models import ChatMessage
 
 
-def register_events(sio: socketio.AsyncServer, game_manager: GameManager):
+def register_events(
+    sio: socketio.AsyncServer,
+    game_manager: GameManager,
+    phase_controller: PhaseController,
+):
     @sio.event
     async def connect(sid, environ):
         print(f"Client connected: {sid}")
@@ -92,3 +97,43 @@ def register_events(sio: socketio.AsyncServer, game_manager: GameManager):
         game_manager.leave_room(room_id, sid)
         await sio.leave_room(sid, room_id)
         await sio.emit("player_left", {"player_id": sid}, room=room_id)
+
+    @sio.event
+    async def start_game(sid):
+        room_id = game_manager.get_player_room(sid)
+        if room_id is None:
+            await sio.emit("error", {"message": "Not in a room"}, to=sid)
+            return {"success": False, "error": "Not in a room"}
+
+        game = game_manager.get_game(room_id)
+        if game is None:
+            return {"success": False, "error": "Game not found"}
+
+        player = game.players.get(sid)
+        if player is None or not player.is_host:
+            await sio.emit("error", {"message": "Only the host can start the game"}, to=sid)
+            return {"success": False, "error": "Not the host"}
+
+        success = await phase_controller.start_game(room_id)
+        if not success:
+            await sio.emit("error", {"message": "Could not start game"}, to=sid)
+            return {"success": False, "error": "Could not start game"}
+
+        return {"success": True}
+
+    @sio.event
+    async def skip_to_voting(sid):
+        room_id = game_manager.get_player_room(sid)
+        if room_id is None:
+            return {"success": False, "error": "Not in a room"}
+
+        game = game_manager.get_game(room_id)
+        if game is None:
+            return {"success": False, "error": "Game not found"}
+
+        player = game.players.get(sid)
+        if player is None or not player.is_host:
+            return {"success": False, "error": "Not the host"}
+
+        success = await phase_controller.skip_to_voting(room_id)
+        return {"success": success}
