@@ -1,9 +1,18 @@
 <script lang="ts">
 	import Lobby from '$lib/components/Lobby.svelte';
 	import Game from '$lib/components/Game.svelte';
-	import { currentRoom, gameState, messages, phaseEndsAt, phaseDuration } from '$lib/stores/game';
+	import {
+		currentRoom,
+		gameState,
+		messages,
+		phaseEndsAt,
+		phaseDuration,
+		myRole,
+		myTeam,
+		werewolfIds
+	} from '$lib/stores/game';
 	import { socket } from '$lib/stores/socket';
-	import type { GameState, ChatMessage } from '$lib/stores/game';
+	import type { GameState, ChatMessage, Role, Team } from '$lib/stores/game';
 
 	$effect(() => {
 		const s = $socket;
@@ -79,6 +88,17 @@
 			}
 		);
 
+		s.on(
+			'game_started',
+			(data: { role: Role; team: Team; werewolf_ids?: string[] }) => {
+				myRole.set(data.role);
+				myTeam.set(data.team);
+				if (data.werewolf_ids) {
+					werewolfIds.set(data.werewolf_ids);
+				}
+			}
+		);
+
 		s.on('error', (data: { message: string }) => {
 			console.error('Socket error:', data.message);
 		});
@@ -90,6 +110,7 @@
 			s.off('host_changed');
 			s.off('new_message');
 			s.off('phase_changed');
+			s.off('game_started');
 			s.off('error');
 		};
 	});

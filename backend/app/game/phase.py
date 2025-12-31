@@ -3,7 +3,8 @@ import time
 import logging
 import socketio
 from app.game.manager import GameManager
-from app.models import GamePhase
+from app.game.roles import assign_roles, get_players_by_role
+from app.models import GamePhase, Role
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,26 @@ class PhaseController:
 
         if game.phase != GamePhase.LOBBY:
             return False
+
+        # Assign roles to all players
+        assign_roles(game.players)
+        logger.info(f"Roles assigned for room {room_id}")
+
+        # Get werewolf IDs for werewolf players to know each other
+        werewolves = get_players_by_role(game.players, Role.WEREWOLF)
+        werewolf_ids = [w.id for w in werewolves]
+
+        # Send each player their role privately
+        for player_id, player in game.players.items():
+            role_info = {
+                "role": player.role.value,
+                "team": player.team.value,
+            }
+            # Werewolves get to know other werewolves
+            if player.role == Role.WEREWOLF:
+                role_info["werewolf_ids"] = werewolf_ids
+
+            await self.sio.emit("game_started", role_info, to=player_id)
 
         game.round_number = 1
         await self.transition_to(room_id, GamePhase.DAY)

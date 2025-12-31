@@ -24,9 +24,15 @@ export interface GameState {
 	phase_duration: number;
 }
 
+export type Role = 'villager' | 'werewolf' | 'seer' | 'doctor';
+export type Team = 'town' | 'mafia';
+
 export const gameState = writable<GameState | null>(null);
 export const messages = writable<ChatMessage[]>([]);
 export const playerName = writable<string>('');
 export const currentRoom = writable<string | null>(null);
 export const phaseEndsAt = writable<number | null>(null);
 export const phaseDuration = writable<number>(0);
+export const myRole = writable<Role | null>(null);
+export const myTeam = writable<Team | null>(null);
+export const werewolfIds = writable<string[]>([]);

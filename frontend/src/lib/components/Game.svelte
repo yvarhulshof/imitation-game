@@ -2,6 +2,7 @@
 	import Chat from './Chat.svelte';
 	import PlayerList from './PlayerList.svelte';
 	import PhaseTimer from './PhaseTimer.svelte';
+	import RoleDisplay from './RoleDisplay.svelte';
 	import { gameState, currentRoom } from '$lib/stores/game';
 	import { socket } from '$lib/stores/socket';
 
@@ -45,6 +46,7 @@
 
 	<main>
 		<aside>
+			<RoleDisplay />
 			<PlayerList />
 		</aside>
 
