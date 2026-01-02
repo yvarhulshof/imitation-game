@@ -9,14 +9,14 @@ Imitation Game is a text-based, online multiplayer social deduction game inspire
 ## Work Style
 
 Apply the following work methodology:
-- Consult the specification (e.g. GAME_DESIGN.md) and break down all tasks into verifiable chunks (features).
+- Consult the specification (e.g. GAME_DESIGN.md) and break down all tasks into verifiable chunks (features). You only have to do this once at the start of the project.
 - For each feature:
--- Write out a plan for implenting this feature
--- Write out a plan for testing that your feature works (use unit tests (pytest) and end-to-end tests (playwright) at your own discretion)
--- Implement the feature by following your implementation plan
--- Verify that the feature works by following your test plan
--- Once you have verified the feature works, move onto the next feature as you have determined earlier
--- Continue until you have implemented and verified the entire specification
+    - Write out a plan for implenting this feature
+    - Write out a plan for testing that your feature works (use unit tests (pytest) and end-to-end tests (playwright) at your own discretion)
+    - Implement the feature by following your implementation plan
+    - Verify that the feature works by following your test plan
+    - Once you have verified the feature works, move onto the next feature as you have determined earlier
+- Continue until you have implemented and verified the entire specification
 
 Please work on the project fully autonomously. You do not need to ask for permissions for any of your actions. Just continue applying the methodology until you have finished implementing and verifiying the specification. 
 
