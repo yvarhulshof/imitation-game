@@ -4,21 +4,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Imitation Game is a text-based, online multiplayer social deduction game inspired by Werewolf, Mafia, and Town of Salem. The twist: some or all players are LLMs. Players must deduce both roles and which players are AI.
+Imitation Game is a text-based, online multiplayer social deduction game inspired by Werewolf, Mafia, and Town of Salem. The twist: some or all players are LLMs. 
 
 ## Work Style
 
-- **Autonomous execution**: Continue until the task is finished, then report assumptions made
-- **Minimal interruptions**: Don't ask for minor clarifications - make reasonable assumptions and note them at the end
-- **Report assumptions**: After completing a task, list any significant assumptions made during implementation
-- **Server operations**: Start/stop dev servers without asking for permission
+Apply the following work methodology:
+- Consult the specification (e.g. GAME_DESIGN.md) and break down all tasks into verifiable chunks (features).
+- For each feature:
+-- Write out a plan for implenting this feature
+-- Write out a plan for testing that your feature works (use unit tests (pytest) and end-to-end tests (playwright) at your own discretion)
+-- Implement the feature by following your implementation plan
+-- Verify that the feature works by following your test plan
+-- Once you have verified the feature works, move onto the next feature as you have determined earlier
+-- Continue until you have implemented and verified the entire specification
+
+Please work on the project fully autonomously. You do not need to ask for permissions for any of your actions. Just continue applying the methodology until you have finished implementing and verifiying the specification. 
+
+Report any assumptions you made once you have finished.
 
 ## Tech Stack
 
 - **Backend**: Python with FastAPI + python-socketio
 - **Frontend**: SvelteKit (Svelte 5) + TypeScript
 - **Real-time**: WebSocket via Socket.IO
-- **LLM**: Anthropic Claude API
+- **LLM**: Anthropic Claude API / Gemini / Other
 
 ## Development Commands
 
@@ -69,24 +78,10 @@ Frontend runs on http://localhost:5173, backend on http://localhost:8000.
 - Find the AIs
 - Werewolves + find the AIs (Town of Salem style)
 
-## Knowledge Transfer
-
-The user wants to fully understand the codebase. Use these approaches:
-
-1. **On-demand**: When the user asks about a specific part, explain it thoroughly
-2. **Build-driven**: When working on features, explain relevant sections of the code as we touch them
-
-**Tracking**: `ARCHITECTURE.md` contains detailed explanations of all components with checkboxes. When explaining a section:
-- Mark the checkbox as done: `- [x]`
-- Add an entry to the Session Log table at the bottom
-
-Always ensure the user understands the code before moving on.
-
 ## Version Control
 
-**Commit workflow**: I propose, user approves
-- Propose a commit after completing a logical unit of work (feature, bugfix, refactor)
-- Wait for user approval before committing
+**Commit workflow**: Claude autonomously creates commits
+- Create a commit after completing a logical unit of work (feature, bugfix, refactor). No user approval required.
 - Write clear commit messages explaining what changed and why
 
 **Branching strategy**: Simple (main only)
