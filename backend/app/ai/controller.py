@@ -215,7 +215,8 @@ class AIController:
                 continue
 
             # Wait a random time before voting
-            await asyncio.sleep(random.uniform(2, 10))
+            # TODO: implement this in a way that doesn't pause the entire game thread
+            #await asyncio.sleep(random.uniform(2, 10))
 
             # Check game state still valid
             game = self.game_manager.get_game(room_id)
@@ -265,7 +266,8 @@ class AIController:
                 continue
 
             # Wait a random time before acting
-            await asyncio.sleep(random.uniform(1, 5))
+            # TODO: implement this in a way that doesn't pause the entire game thread
+            #await asyncio.sleep(random.uniform(1, 5))
 
             # Check game state still valid
             game = self.game_manager.get_game(room_id)
