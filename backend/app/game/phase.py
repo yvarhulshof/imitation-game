@@ -10,10 +10,14 @@ logger = logging.getLogger(__name__)
 
 
 # Phase durations in seconds
+# NOTE: set to 10 for dev purposes
 PHASE_DURATIONS = {
-    GamePhase.DAY: 90,
-    GamePhase.VOTING: 30,
-    GamePhase.NIGHT: 30,
+    # GamePhase.DAY: 90,
+    # GamePhase.VOTING: 30,
+    # GamePhase.NIGHT: 30,
+    GamePhase.DAY: 10,
+    GamePhase.VOTING: 10,
+    GamePhase.NIGHT: 10,
 }
 
 
