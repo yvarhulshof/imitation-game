@@ -2,13 +2,14 @@ import time
 import socketio
 from app.game.manager import GameManager
 from app.game.phase import PhaseController
-from app.models import ChatMessage
+from app.models import ChatMessage, GamePhase, Role
 
 
 def register_events(
     sio: socketio.AsyncServer,
     game_manager: GameManager,
     phase_controller: PhaseController,
+    ai_controller=None,
 ):
     @sio.event
     async def connect(sid, environ):
@@ -81,6 +82,14 @@ def register_events(
         if player is None:
             return
 
+        # Dead players cannot chat
+        if not player.is_alive:
+            return
+
+        # No chat during night phase
+        if game.phase == GamePhase.NIGHT:
+            return
+
         message = ChatMessage(
             player_id=sid,
             player_name=player.name,
@@ -137,3 +146,155 @@ def register_events(
 
         success = await phase_controller.skip_to_voting(room_id)
         return {"success": success}
+
+    @sio.event
+    async def submit_vote(sid, data):
+        target_id = data.get("target_id")
+        if target_id is None:
+            return {"success": False, "error": "No target specified"}
+
+        room_id = game_manager.get_player_room(sid)
+        if room_id is None:
+            return {"success": False, "error": "Not in a room"}
+
+        game = game_manager.get_game(room_id)
+        if game is None:
+            return {"success": False, "error": "Game not found"}
+
+        if game.phase != GamePhase.VOTING:
+            return {"success": False, "error": "Not in voting phase"}
+
+        success = game.submit_vote(sid, target_id)
+        if not success:
+            return {"success": False, "error": "Invalid vote"}
+
+        # Broadcast updated vote counts to all players
+        await sio.emit(
+            "vote_update",
+            {"votes": game.get_vote_counts()},
+            room=room_id,
+        )
+
+        return {"success": True}
+
+    @sio.event
+    async def night_action(sid, data):
+        target_id = data.get("target_id")
+        if target_id is None:
+            return {"success": False, "error": "No target specified"}
+
+        room_id = game_manager.get_player_room(sid)
+        if room_id is None:
+            return {"success": False, "error": "Not in a room"}
+
+        game = game_manager.get_game(room_id)
+        if game is None:
+            return {"success": False, "error": "Game not found"}
+
+        if game.phase != GamePhase.NIGHT:
+            return {"success": False, "error": "Not in night phase"}
+
+        player = game.players.get(sid)
+        if player is None or not player.is_alive:
+            return {"success": False, "error": "Cannot perform action"}
+
+        # Handle action based on role
+        if player.role == Role.WEREWOLF:
+            success = game.submit_werewolf_vote(sid, target_id)
+            if success:
+                # Broadcast vote counts to all werewolves
+                werewolf_ids = [
+                    p.id for p in game.players.values()
+                    if p.role == Role.WEREWOLF and p.is_alive
+                ]
+                for wolf_id in werewolf_ids:
+                    await sio.emit(
+                        "werewolf_vote_update",
+                        {"votes": game.get_werewolf_vote_counts()},
+                        to=wolf_id,
+                    )
+            return {"success": success}
+
+        elif player.role == Role.SEER:
+            success = game.submit_seer_action(sid, target_id)
+            return {"success": success}
+
+        elif player.role == Role.DOCTOR:
+            success = game.submit_doctor_action(sid, target_id)
+            return {"success": success}
+
+        else:
+            # Villagers have no night action
+            return {"success": False, "error": "No night action available"}
+
+    @sio.event
+    async def add_ai_player(sid, data=None):
+        """Add an AI player to the room."""
+        if ai_controller is None:
+            return {"success": False, "error": "AI not available"}
+
+        room_id = game_manager.get_player_room(sid)
+        if room_id is None:
+            return {"success": False, "error": "Not in a room"}
+
+        game = game_manager.get_game(room_id)
+        if game is None:
+            return {"success": False, "error": "Game not found"}
+
+        player = game.players.get(sid)
+        if player is None or not player.is_host:
+            return {"success": False, "error": "Only the host can add AI players"}
+
+        if game.phase != GamePhase.LOBBY:
+            return {"success": False, "error": "Can only add AI players in lobby"}
+
+        ai_player = ai_controller.add_ai_player(room_id)
+        if ai_player is None:
+            return {"success": False, "error": "Could not add AI player"}
+
+        # Notify all players in room
+        await sio.emit(
+            "player_joined",
+            {"player_id": ai_player.id, "player_name": ai_player.name},
+            room=room_id,
+        )
+
+        return {"success": True, "player": ai_player.model_dump()}
+
+    @sio.event
+    async def remove_ai_player(sid, data):
+        """Remove an AI player from the room."""
+        if ai_controller is None:
+            return {"success": False, "error": "AI not available"}
+
+        ai_id = data.get("ai_id")
+        if ai_id is None:
+            return {"success": False, "error": "No AI player specified"}
+
+        room_id = game_manager.get_player_room(sid)
+        if room_id is None:
+            return {"success": False, "error": "Not in a room"}
+
+        game = game_manager.get_game(room_id)
+        if game is None:
+            return {"success": False, "error": "Game not found"}
+
+        player = game.players.get(sid)
+        if player is None or not player.is_host:
+            return {"success": False, "error": "Only the host can remove AI players"}
+
+        if game.phase != GamePhase.LOBBY:
+            return {"success": False, "error": "Can only remove AI players in lobby"}
+
+        success = ai_controller.remove_ai_player(room_id, ai_id)
+        if not success:
+            return {"success": False, "error": "Could not remove AI player"}
+
+        # Notify all players in room
+        await sio.emit(
+            "player_left",
+            {"player_id": ai_id},
+            room=room_id,
+        )
+
+        return {"success": True}

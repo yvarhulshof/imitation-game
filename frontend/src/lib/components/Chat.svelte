@@ -1,17 +1,28 @@
 <script lang="ts">
-	import { messages, currentRoom, playerName } from '$lib/stores/game';
-	import { getSocket } from '$lib/stores/socket';
-	import type { ChatMessage } from '$lib/stores/game';
+	import { messages, currentRoom, gameState } from '$lib/stores/game';
+	import { socket } from '$lib/stores/socket';
 
 	let messageInput = $state('');
 	let chatContainer: HTMLDivElement;
 
-	function sendMessage() {
-		if (!messageInput.trim()) return;
+	let myPlayer = $derived($gameState?.players.find((p) => p.id === $socket?.id));
+	let isAlive = $derived(myPlayer?.is_alive ?? true);
+	let isNightPhase = $derived($gameState?.phase === 'night');
+	let canChat = $derived(isAlive && !isNightPhase);
 
-		const socket = getSocket();
-		if (socket && $currentRoom) {
-			socket.emit('send_message', {
+	let placeholderText = $derived(
+		!isAlive
+			? 'You are dead and cannot chat'
+			: isNightPhase
+				? 'Night has fallen... no chatting allowed'
+				: 'Type a message...'
+	);
+
+	function sendMessage() {
+		if (!messageInput.trim() || !canChat) return;
+
+		if ($socket && $currentRoom) {
+			$socket.emit('send_message', {
 				room_id: $currentRoom,
 				content: messageInput.trim()
 			});
@@ -51,14 +62,15 @@
 		{/each}
 	</div>
 
-	<div class="input-area">
+	<div class="input-area" class:disabled={!canChat}>
 		<input
 			type="text"
 			bind:value={messageInput}
 			onkeydown={handleKeydown}
-			placeholder="Type a message..."
+			placeholder={placeholderText}
+			disabled={!canChat}
 		/>
-		<button onclick={sendMessage}>Send</button>
+		<button onclick={sendMessage} disabled={!canChat}>Send</button>
 	</div>
 </div>
 
@@ -110,5 +122,14 @@
 
 	.input-area input {
 		flex: 1;
+	}
+
+	.input-area.disabled {
+		opacity: 0.6;
+	}
+
+	.input-area.disabled input::placeholder {
+		color: var(--text-secondary);
+		font-style: italic;
 	}
 </style>

@@ -9,10 +9,18 @@
 		phaseDuration,
 		myRole,
 		myTeam,
-		werewolfIds
+		werewolfIds,
+		voteCounts,
+		myVote,
+		lastElimination,
+		werewolfVoteCounts,
+		myNightAction,
+		seerResult,
+		nightDeaths,
+		gameEndData
 	} from '$lib/stores/game';
 	import { socket } from '$lib/stores/socket';
-	import type { GameState, ChatMessage, Role, Team } from '$lib/stores/game';
+	import type { GameState, ChatMessage, Role, Team, EliminatedPlayer, SeerResult, NightDeath, GameEndData } from '$lib/stores/game';
 
 	$effect(() => {
 		const s = $socket;
@@ -85,6 +93,68 @@
 				});
 				phaseEndsAt.set(data.ends_at);
 				phaseDuration.set(data.duration);
+
+				// Clear votes when entering voting phase
+				if (data.phase === 'voting') {
+					voteCounts.set({});
+					myVote.set(null);
+				}
+
+				// Clear night actions when entering night phase
+				if (data.phase === 'night') {
+					werewolfVoteCounts.set({});
+					myNightAction.set(null);
+				}
+			}
+		);
+
+		s.on('vote_update', (data: { votes: Record<string, number> }) => {
+			voteCounts.set(data.votes);
+		});
+
+		s.on('werewolf_vote_update', (data: { votes: Record<string, number> }) => {
+			werewolfVoteCounts.set(data.votes);
+		});
+
+		s.on('seer_result', (data: SeerResult) => {
+			seerResult.set(data);
+		});
+
+		s.on('night_result', (data: { deaths: NightDeath[] }) => {
+			nightDeaths.set(data.deaths);
+
+			// Update is_alive for dead players
+			if (data.deaths.length > 0) {
+				gameState.update((state) => {
+					if (!state) return state;
+					const deadIds = data.deaths.map((d) => d.id);
+					return {
+						...state,
+						players: state.players.map((p) =>
+							deadIds.includes(p.id) ? { ...p, is_alive: false } : p
+						)
+					};
+				});
+			}
+		});
+
+		s.on(
+			'player_eliminated',
+			(data: { eliminated: EliminatedPlayer | null; reason: string }) => {
+				lastElimination.set(data);
+
+				// Update player's is_alive status if someone was eliminated
+				if (data.eliminated) {
+					gameState.update((state) => {
+						if (!state) return state;
+						return {
+							...state,
+							players: state.players.map((p) =>
+								p.id === data.eliminated!.id ? { ...p, is_alive: false } : p
+							)
+						};
+					});
+				}
 			}
 		);
 
@@ -99,6 +169,10 @@
 			}
 		);
 
+		s.on('game_ended', (data: GameEndData) => {
+			gameEndData.set(data);
+		});
+
 		s.on('error', (data: { message: string }) => {
 			console.error('Socket error:', data.message);
 		});
@@ -110,7 +184,13 @@
 			s.off('host_changed');
 			s.off('new_message');
 			s.off('phase_changed');
+			s.off('vote_update');
+			s.off('werewolf_vote_update');
+			s.off('seer_result');
+			s.off('night_result');
+			s.off('player_eliminated');
 			s.off('game_started');
+			s.off('game_ended');
 			s.off('error');
 		};
 	});

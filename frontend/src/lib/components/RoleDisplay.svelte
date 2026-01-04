@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { myRole, myTeam, werewolfIds, gameState } from '$lib/stores/game';
+	import { myRole, myTeam, werewolfIds, gameState, seerResult } from '$lib/stores/game';
 	import { socket } from '$lib/stores/socket';
 
 	const roleNames: Record<string, string> = {
@@ -36,6 +36,15 @@
 			<p class="fellow-wolves">
 				Fellow werewolves: {fellowWerewolves.join(', ')}
 			</p>
+		{/if}
+		{#if $myRole === 'seer' && $seerResult}
+			<div class="seer-result">
+				<span class="result-label">Investigation Result:</span>
+				<span class="result-name">{$seerResult.target_name}</span> is a
+				<span class="result-role" class:mafia={$seerResult.role === 'werewolf'}>
+					{roleNames[$seerResult.role]}
+				</span>
+			</div>
 		{/if}
 	</div>
 {/if}
@@ -87,5 +96,33 @@
 		color: #dc3545;
 		margin: 0.5rem 0 0 0;
 		font-style: italic;
+	}
+
+	.seer-result {
+		margin-top: 0.75rem;
+		padding-top: 0.75rem;
+		border-top: 1px solid var(--bg-secondary);
+		font-size: 0.9rem;
+	}
+
+	.result-label {
+		color: var(--text-secondary);
+		display: block;
+		font-size: 0.8rem;
+		margin-bottom: 0.25rem;
+	}
+
+	.result-name {
+		font-weight: bold;
+		color: var(--text-primary);
+	}
+
+	.result-role {
+		font-weight: bold;
+		color: var(--accent);
+	}
+
+	.result-role.mafia {
+		color: #dc3545;
 	}
 </style>

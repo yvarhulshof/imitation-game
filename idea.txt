@@ -1,9 +1,0 @@
-The goal of this project is to create a text-based, online multiplayer social deduction game in the style of Werewolf, Mafia and Town of Salem. 
-However the game has a twist: some or all of the other players are LLMs. 
-In addition to finding out the role of other players, at the end of the game players will get to vote which of the other players they suspect to be AI.
-Variations on this could be made, e.g. the Werewolf team being always either fully human or fully AI.
-
-The game should have a simple UI: the main UI element will be a chat window in which the different players communicate, 
-and in which information regarding player actions are displayed. 
-
-The game should run in the browser. The exact tech stack is yet to be determined. Python and javascript are possible candidates for the server and clientside. 

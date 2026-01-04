@@ -27,6 +27,13 @@ export interface GameState {
 export type Role = 'villager' | 'werewolf' | 'seer' | 'doctor';
 export type Team = 'town' | 'mafia';
 
+export interface EliminatedPlayer {
+	id: string;
+	name: string;
+	role: Role | null;
+	team: Team | null;
+}
+
 export const gameState = writable<GameState | null>(null);
 export const messages = writable<ChatMessage[]>([]);
 export const playerName = writable<string>('');
@@ -36,3 +43,36 @@ export const phaseDuration = writable<number>(0);
 export const myRole = writable<Role | null>(null);
 export const myTeam = writable<Team | null>(null);
 export const werewolfIds = writable<string[]>([]);
+export const voteCounts = writable<Record<string, number>>({});
+export const myVote = writable<string | null>(null);
+export const lastElimination = writable<{ eliminated: EliminatedPlayer | null; reason: string } | null>(null);
+
+// Night action stores
+export const werewolfVoteCounts = writable<Record<string, number>>({});
+export const myNightAction = writable<string | null>(null);
+export interface SeerResult {
+	target_id: string;
+	target_name: string;
+	role: Role;
+}
+export const seerResult = writable<SeerResult | null>(null);
+export interface NightDeath {
+	id: string;
+	name: string;
+	role: Role | null;
+}
+export const nightDeaths = writable<NightDeath[]>([]);
+
+// Game end stores
+export interface GameEndPlayer {
+	id: string;
+	name: string;
+	role: Role | null;
+	team: Team | null;
+	is_alive: boolean;
+}
+export interface GameEndData {
+	winner: Team;
+	players: GameEndPlayer[];
+}
+export const gameEndData = writable<GameEndData | null>(null);
