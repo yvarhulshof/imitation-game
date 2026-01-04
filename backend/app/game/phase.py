@@ -62,7 +62,9 @@ class PhaseController:
             self.ai_controller.on_game_start(room_id)
 
         game.round_number = 1
-        await self.transition_to(room_id, GamePhase.DAY)
+        # NOTE: changed first game phase to be night instead of day (as is standard for Werewolf)
+        #await self.transition_to(room_id, GamePhase.DAY)
+        await self.transition_to(room_id, GamePhase.NIGHT)
         return True
 
     async def transition_to(self, room_id: str, phase: GamePhase) -> None:
