@@ -1,6 +1,24 @@
+"""AI Player implementations - Mock and LLM-powered."""
+
+import logging
 import random
+import time
 import uuid
+from typing import Any
+
 from app.models import ChatMessage, Role, Team
+from app.ai.llm_client import LLMClient, LLMError
+from app.ai.prompts import (
+    load_strategy,
+    build_system_instruction,
+    build_chat_decision_prompt,
+    build_vote_prompt,
+    build_night_action_prompt,
+    build_notes_update_prompt,
+)
+from app.config import MAX_NOTES_TOKENS
+
+logger = logging.getLogger(__name__)
 
 
 # Random AI names
@@ -10,7 +28,7 @@ AI_NAMES = [
     "Dakota", "Emery", "Finley", "Hayden", "Jamie",
 ]
 
-# Pre-defined chat messages by situation
+# Pre-defined chat messages by situation (used for fallback)
 DAY_CHAT_MESSAGES = {
     "general": [
         "Anyone have any suspicions?",
@@ -67,10 +85,310 @@ def get_random_name(existing_names: list[str]) -> str:
     return random.choice(available)
 
 
+def truncate_to_tokens(text: str, max_tokens: int) -> str:
+    """Rough token truncation (approximates ~4 chars per token)."""
+    max_chars = max_tokens * 4
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "..."
+
+
+def extract_target_id(target: str, valid_ids: list[str]) -> str | None:
+    """
+    Extract a valid target ID from LLM response.
+
+    Handles various formats like:
+    - "ai_abc123" (exact ID)
+    - "id=ai_abc123" (with prefix)
+    - "Alex: id=ai_abc123" (with name prefix)
+    - "TqkBFd7t1ZQWbxV7AAAF" (human player ID)
+    """
+    if not target:
+        return None
+
+    # Direct match
+    if target in valid_ids:
+        return target
+
+    # Try to find any valid ID within the target string
+    for valid_id in valid_ids:
+        if valid_id in target:
+            return valid_id
+
+    # Strip common prefixes and try again
+    cleaned = target.strip()
+    for prefix in ["id=", "id:", "target=", "target:"]:
+        if cleaned.lower().startswith(prefix):
+            cleaned = cleaned[len(prefix):].strip()
+            if cleaned in valid_ids:
+                return cleaned
+
+    return None
+
+
+class LLMPlayer:
+    """LLM-powered AI player using Gemini API."""
+
+    def __init__(
+        self,
+        player_id: str,
+        name: str,
+        llm_client: LLMClient | None = None,
+        role: Role | None = None,
+        team: Team | None = None,
+    ):
+        self.id = player_id
+        self.name = name
+        self.role = role
+        self.team = team
+        self.llm_client = llm_client or LLMClient()
+        self.notes = ""
+        self.strategy = ""
+        self.seer_results: list[dict] = []  # Track seer investigation results
+        self.last_message_time = 0.0
+        self.messages_sent = 0
+        self.max_messages_per_phase = random.randint(3, 6)
+
+    def set_role(self, role: Role, team: Team) -> None:
+        """Set the AI's role and load appropriate strategy."""
+        self.role = role
+        self.team = team
+        self.strategy = load_strategy(role)
+        logger.info(f"LLMPlayer {self.name} assigned role {role.value}")
+
+    def _build_context(
+        self,
+        alive_players: list[dict],
+        messages: list[dict] | None = None,
+        vote_counts: dict[str, int] | None = None,
+        dead_players: list[dict] | None = None,
+        fellow_wolves: list[str] | None = None,
+        round_number: int = 1,
+        phase: Any = None,
+    ) -> dict[str, Any]:
+        """Build context dict for prompts."""
+        # Build player name lookup
+        player_names = {p["id"]: p["name"] for p in alive_players}
+        if dead_players:
+            for p in dead_players:
+                player_names[p["id"]] = p["name"]
+
+        # Get fellow wolf names
+        fellow_wolf_names = []
+        if fellow_wolves:
+            fellow_wolf_names = [player_names.get(wid, wid) for wid in fellow_wolves]
+
+        return {
+            "player_id": self.id,
+            "player_name": self.name,
+            "role": self.role,
+            "team": self.team,
+            "phase": phase,
+            "round_number": round_number,
+            "alive_players": alive_players,
+            "dead_players": dead_players or [],
+            "messages": messages or [],
+            "vote_counts": vote_counts or {},
+            "player_names": player_names,
+            "fellow_wolves": fellow_wolf_names,
+            "seer_results": self.seer_results,
+            "messages_sent": self.messages_sent,
+        }
+
+    async def decide_chat_action(
+        self,
+        context: dict[str, Any],
+    ) -> ChatMessage | None:
+        """Decide whether to chat and generate message if so."""
+        try:
+            system_instruction = build_system_instruction(context)
+            prompt = build_chat_decision_prompt(context, self.strategy, self.notes)
+
+            response = await self.llm_client.generate(
+                prompt=prompt,
+                response_format="json",
+                system_instruction=system_instruction,
+            )
+
+            if isinstance(response, dict) and response.get("send"):
+                message_content = response.get("message", "")
+                if message_content:
+                    self.messages_sent += 1
+                    self.last_message_time = time.time()
+                    logger.debug(f"LLM {self.name} decided to chat: {message_content}")
+                    return ChatMessage(
+                        player_id=self.id,
+                        player_name=self.name,
+                        content=message_content,
+                        timestamp=time.time(),
+                    )
+
+            return None
+
+        except LLMError as e:
+            logger.warning(f"LLM chat decision failed for {self.name}: {e}")
+            return self._fallback_chat_message(context)
+
+    async def choose_vote_target(
+        self,
+        context: dict[str, Any],
+        valid_targets: list[dict],
+    ) -> str | None:
+        """Choose who to vote for using LLM reasoning."""
+        if not valid_targets:
+            return None
+
+        try:
+            system_instruction = build_system_instruction(context)
+            prompt = build_vote_prompt(context, self.strategy, self.notes, valid_targets)
+
+            response = await self.llm_client.generate(
+                prompt=prompt,
+                response_format="json",
+                system_instruction=system_instruction,
+            )
+
+            if isinstance(response, dict):
+                raw_target = response.get("target", "")
+                reasoning = response.get("reasoning", "")
+                logger.info(f"LLM {self.name} voting for {raw_target}: {reasoning}")
+
+                # Extract valid target ID from response
+                valid_ids = [t["id"] for t in valid_targets]
+                target_id = extract_target_id(raw_target, valid_ids)
+                if target_id:
+                    return target_id
+                else:
+                    logger.warning(f"LLM returned invalid target {raw_target}")
+
+        except LLMError as e:
+            logger.warning(f"LLM vote decision failed for {self.name}: {e}")
+
+        # Fallback to random
+        return random.choice(valid_targets)["id"]
+
+    async def choose_night_action_target(
+        self,
+        context: dict[str, Any],
+        valid_targets: list[dict],
+    ) -> str | None:
+        """Choose night action target using LLM reasoning."""
+        if not valid_targets:
+            return None
+
+        if self.role == Role.VILLAGER:
+            return None  # Villagers have no night action
+
+        try:
+            system_instruction = build_system_instruction(context)
+            prompt = build_night_action_prompt(
+                context, self.strategy, self.notes, valid_targets
+            )
+
+            response = await self.llm_client.generate(
+                prompt=prompt,
+                response_format="json",
+                system_instruction=system_instruction,
+            )
+
+            if isinstance(response, dict):
+                raw_target = response.get("target", "")
+                reasoning = response.get("reasoning", "")
+                logger.info(
+                    f"LLM {self.name} ({self.role.value}) targeting {raw_target}: {reasoning}"
+                )
+
+                # Extract valid target ID from response
+                valid_ids = [t["id"] for t in valid_targets]
+                target_id = extract_target_id(raw_target, valid_ids)
+                if target_id:
+                    return target_id
+                else:
+                    logger.warning(f"LLM returned invalid target {raw_target}")
+
+        except LLMError as e:
+            logger.warning(f"LLM night action failed for {self.name}: {e}")
+
+        # Fallback to random
+        return random.choice(valid_targets)["id"]
+
+    async def update_notes(self, context: dict[str, Any]) -> None:
+        """Update notes at end of phase using LLM."""
+        try:
+            prompt = build_notes_update_prompt(context, self.strategy, self.notes)
+
+            new_notes = await self.llm_client.generate(
+                prompt=prompt,
+                response_format="text",
+            )
+
+            if isinstance(new_notes, str):
+                self.notes = truncate_to_tokens(new_notes, MAX_NOTES_TOKENS)
+                logger.debug(f"LLM {self.name} updated notes ({len(self.notes)} chars)")
+
+        except LLMError as e:
+            logger.warning(f"LLM notes update failed for {self.name}: {e}")
+            # Keep existing notes on failure
+
+    def add_seer_result(self, target_name: str, is_wolf: bool) -> None:
+        """Add a seer investigation result."""
+        self.seer_results.append({
+            "name": target_name,
+            "is_wolf": "Werewolf" if is_wolf else "Not a werewolf",
+        })
+
+    def reset_for_new_day(self) -> None:
+        """Reset daily counters."""
+        self.messages_sent = 0
+        self.max_messages_per_phase = random.randint(3, 6)
+
+    def _fallback_chat_message(
+        self, context: dict[str, Any]
+    ) -> ChatMessage | None:
+        """Generate fallback chat message using templates."""
+        # Only chat occasionally on fallback
+        if random.random() > 0.3:
+            return None
+
+        if self.messages_sent >= self.max_messages_per_phase:
+            return None
+
+        other_names = [
+            p["name"] for p in context["alive_players"] if p["id"] != self.id
+        ]
+
+        if self.team == Team.MAFIA and random.random() < 0.4 and other_names:
+            target = random.choice(other_names)
+            template = random.choice(WEREWOLF_CHAT_MESSAGES)
+            content = template.format(player=target)
+        elif random.random() < 0.3 and other_names:
+            target = random.choice(other_names)
+            template = random.choice(DAY_CHAT_MESSAGES["accusation"])
+            content = template.format(player=target)
+        else:
+            content = random.choice(DAY_CHAT_MESSAGES["general"])
+
+        self.messages_sent += 1
+        self.last_message_time = time.time()
+
+        return ChatMessage(
+            player_id=self.id,
+            player_name=self.name,
+            content=content,
+            timestamp=time.time(),
+        )
+
+
 class MockAIPlayer:
     """Rule-based AI player for testing without LLM API."""
 
-    def __init__(self, player_id: str, name: str, role: Role | None = None, team: Team | None = None):
+    def __init__(
+        self,
+        player_id: str,
+        name: str,
+        role: Role | None = None,
+        team: Team | None = None,
+    ):
         self.id = player_id
         self.name = name
         self.role = role
@@ -78,6 +396,7 @@ class MockAIPlayer:
         self.last_message_time = 0.0
         self.messages_sent = 0
         self.max_messages_per_day = random.randint(2, 5)
+        self.notes = ""  # Compatibility with LLMPlayer
 
     def set_role(self, role: Role, team: Team) -> None:
         """Set the AI's role after game starts."""
@@ -102,7 +421,9 @@ class MockAIPlayer:
             return random.random() < 0.3
         return random.random() < 0.15
 
-    def generate_chat_message(self, other_players: list[str], is_accused: bool = False) -> str:
+    def generate_chat_message(
+        self, other_players: list[str], is_accused: bool = False
+    ) -> str:
         """Generate a chat message based on game state."""
         if is_accused:
             return random.choice(DAY_CHAT_MESSAGES["defense"])
@@ -129,7 +450,8 @@ class MockAIPlayer:
         """Choose who to vote for during voting phase."""
         # Filter out self and fellow wolves
         valid_targets = [
-            p for p in alive_players
+            p
+            for p in alive_players
             if p["id"] != self.id
             and (known_wolves is None or p["id"] not in known_wolves)
         ]
@@ -137,8 +459,6 @@ class MockAIPlayer:
         if not valid_targets:
             return None
 
-        # Town: random vote (could be smarter with chat analysis later)
-        # Wolves: vote for town members
         return random.choice(valid_targets)["id"]
 
     def choose_night_action_target(
@@ -150,7 +470,8 @@ class MockAIPlayer:
         if self.role == Role.WEREWOLF:
             # Target non-wolves
             valid_targets = [
-                p for p in alive_players
+                p
+                for p in alive_players
                 if p["id"] != self.id
                 and (fellow_wolves is None or p["id"] not in fellow_wolves)
             ]
@@ -172,17 +493,3 @@ class MockAIPlayer:
         """Reset daily counters."""
         self.messages_sent = 0
         self.max_messages_per_day = random.randint(2, 5)
-
-
-# Keep original AIPlayer for future LLM integration
-class AIPlayer:
-    """LLM-powered AI player (requires API key)."""
-
-    def __init__(self, name: str, personality: str = ""):
-        self.name = name
-        self.personality = personality or "You are a player in a social deduction game."
-        self.message_history: list[ChatMessage] = []
-
-    async def generate_response(self, messages: list[ChatMessage]) -> str:
-        # Placeholder - would use LLM API here
-        raise NotImplementedError("LLM integration not configured")

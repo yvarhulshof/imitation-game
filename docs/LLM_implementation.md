@@ -73,12 +73,12 @@ Called at the end of each phase. The AI summarizes new information and updates i
 | Setting | Value |
 |---------|-------|
 | Provider | Google Gemini |
-| Model | `gemini-2.0-flash` |
+| Model | `gemini-2.5-flash-lite` |
 | Timeout | 10 seconds |
 | Retries | 2 (exponential backoff) |
 | Fallback | Random valid choice |
 
-**Environment variable**: `GOOGLE_API_KEY`
+**Environment variable**: `GEMINI_API_KEY`
 
 ## Error Handling
 
@@ -92,7 +92,7 @@ Called at the end of each phase. The AI summarizes new information and updates i
 Each prompt follows this structure:
 
 ```
-[System] You are playing a social deduction game. Your role is {role}.
+[System] You are playing a text-based version of the social deduction game Werewolf. Your role is {role}.
 
 [Strategy Document]
 {static_strategy}

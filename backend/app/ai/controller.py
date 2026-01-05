@@ -1,15 +1,24 @@
 """AI Controller - Manages AI player behavior during game phases."""
 
 import asyncio
-import time
 import logging
 import random
+import time
+from typing import Union
+
 import socketio
-from app.ai.player import MockAIPlayer, generate_ai_id, get_random_name
+
+from app.ai.llm_client import LLMClient
+from app.ai.notes_store import NotesStore
+from app.ai.player import LLMPlayer, MockAIPlayer, generate_ai_id, get_random_name
+from app.config import AI_CHAT_STAGGER_MIN, AI_CHAT_STAGGER_MAX, GOOGLE_API_KEY
 from app.game.manager import GameManager
-from app.models import Player, PlayerType, GamePhase, Role, ChatMessage, ROLE_TEAMS
+from app.models import ChatMessage, GamePhase, Player, PlayerType, Role
 
 logger = logging.getLogger(__name__)
+
+# Type alias for AI player (can be either LLM or Mock)
+AIPlayerType = Union[LLMPlayer, MockAIPlayer]
 
 
 class AIController:
@@ -18,10 +27,21 @@ class AIController:
     def __init__(self, sio: socketio.AsyncServer, game_manager: GameManager):
         self.sio = sio
         self.game_manager = game_manager
-        # room_id -> {player_id: MockAIPlayer}
-        self.ai_players: dict[str, dict[str, MockAIPlayer]] = {}
+        # room_id -> {player_id: AIPlayerType}
+        self.ai_players: dict[str, dict[str, AIPlayerType]] = {}
         # room_id -> asyncio.Task (for chat loops)
         self.chat_tasks: dict[str, asyncio.Task] = {}
+        # Shared LLM client for all AI players
+        self.llm_client = LLMClient() if GOOGLE_API_KEY else None
+        # Notes persistence
+        self.notes_store = NotesStore()
+        # Use LLM mode if API key is configured
+        self.use_llm = bool(GOOGLE_API_KEY)
+
+        if self.use_llm:
+            logger.info("AI Controller initialized with LLM mode")
+        else:
+            logger.info("AI Controller initialized with Mock mode (no API key)")
 
     def add_ai_player(self, room_id: str) -> Player | None:
         """Add an AI player to a room."""
@@ -51,14 +71,22 @@ class AIController:
         # Add to game state
         game.add_player(player)
 
-        # Create MockAIPlayer for behavior
+        # Create AI player instance (LLM or Mock based on config)
         if room_id not in self.ai_players:
             self.ai_players[room_id] = {}
 
-        mock_ai = MockAIPlayer(ai_id, ai_name)
-        self.ai_players[room_id][ai_id] = mock_ai
+        if self.use_llm:
+            ai_player = LLMPlayer(ai_id, ai_name, llm_client=self.llm_client)
+            # Load any existing notes
+            existing_notes = self.notes_store.load(room_id, ai_id)
+            if existing_notes:
+                ai_player.notes = existing_notes
+        else:
+            ai_player = MockAIPlayer(ai_id, ai_name)
 
-        logger.info(f"Added AI player {ai_name} ({ai_id}) to room {room_id}")
+        self.ai_players[room_id][ai_id] = ai_player
+
+        logger.info(f"Added {'LLM' if self.use_llm else 'Mock'} AI player {ai_name} ({ai_id}) to room {room_id}")
         return player
 
     def remove_ai_player(self, room_id: str, ai_id: str) -> bool:
@@ -74,6 +102,8 @@ class AIController:
 
         if room_id in self.ai_players:
             self.ai_players[room_id].pop(ai_id, None)
+            # Clear notes for removed player
+            self.notes_store.clear_player(room_id, ai_id)
 
         return True
 
@@ -87,11 +117,11 @@ class AIController:
             return
 
         # Update AI players with their assigned roles
-        for ai_id, mock_ai in self.ai_players[room_id].items():
+        for ai_id, ai_player in self.ai_players[room_id].items():
             player = game.players.get(ai_id)
             if player and player.role and player.team:
-                mock_ai.set_role(player.role, player.team)
-                logger.info(f"AI {mock_ai.name} assigned role {player.role.value}")
+                ai_player.set_role(player.role, player.team)
+                logger.info(f"AI {ai_player.name} assigned role {player.role.value}")
 
     async def on_phase_change(self, room_id: str, new_phase: GamePhase) -> None:
         """Called when phase changes - trigger AI actions."""
@@ -99,11 +129,11 @@ class AIController:
             return
 
         if new_phase == GamePhase.DAY:
+            # Reset daily counters
+            for ai_player in self.ai_players[room_id].values():
+                ai_player.reset_for_new_day()
             # Start chat task for AI players
             await self._start_chat_loop(room_id)
-            # Reset daily counters
-            for mock_ai in self.ai_players[room_id].values():
-                mock_ai.reset_for_new_day()
 
         elif new_phase == GamePhase.VOTING:
             # Stop chat and submit votes
@@ -111,12 +141,81 @@ class AIController:
             await self._submit_ai_votes(room_id)
 
         elif new_phase == GamePhase.NIGHT:
-            # Submit night actions
+            # Update notes at end of day/voting, then submit night actions
+            await self._update_ai_notes(room_id)
             await self._submit_ai_night_actions(room_id)
 
         elif new_phase == GamePhase.ENDED:
             # Cleanup
             self._stop_chat_loop(room_id)
+            await self._update_ai_notes(room_id)  # Final notes update
+            self._save_all_notes(room_id)
+
+    def _build_player_context(
+        self,
+        ai_player: AIPlayerType,
+        game,
+        additional_context: dict | None = None,
+    ) -> dict:
+        """Build context dict for AI player decisions."""
+        # Get alive players
+        alive_players = [
+            {"id": p.id, "name": p.name}
+            for p in game.players.values()
+            if p.is_alive
+        ]
+
+        # Get dead players
+        dead_players = [
+            {"id": p.id, "name": p.name}
+            for p in game.players.values()
+            if not p.is_alive
+        ]
+
+        # Get fellow wolves (if werewolf)
+        fellow_wolves = []
+        if ai_player.role == Role.WEREWOLF:
+            fellow_wolves = [
+                p.id for p in game.players.values()
+                if p.role == Role.WEREWOLF and p.is_alive and p.id != ai_player.id
+            ]
+
+        # Get messages as dicts
+        messages = [
+            {
+                "player_id": m.player_id,
+                "player_name": m.player_name,
+                "content": m.content,
+                "timestamp": m.timestamp,
+            }
+            for m in game.messages
+        ]
+
+        context = {
+            "player_id": ai_player.id,
+            "player_name": ai_player.name,
+            "role": ai_player.role,
+            "team": ai_player.team,
+            "phase": game.phase,
+            "round_number": game.round_number,
+            "alive_players": alive_players,
+            "dead_players": dead_players,
+            "messages": messages,
+            "vote_counts": game.get_vote_counts() if game.phase == GamePhase.VOTING else {},
+            "player_names": {p["id"]: p["name"] for p in alive_players + dead_players},
+            "fellow_wolves": fellow_wolves,
+            "messages_sent": ai_player.messages_sent,
+        }
+
+        # Add seer results if LLMPlayer
+        if isinstance(ai_player, LLMPlayer):
+            context["seer_results"] = ai_player.seer_results
+
+        # Merge additional context
+        if additional_context:
+            context.update(additional_context)
+
+        return context
 
     async def _start_chat_loop(self, room_id: str) -> None:
         """Start a background task for AI chat during DAY phase."""
@@ -131,46 +230,41 @@ class AIController:
 
             try:
                 while True:
+                    # Random interval between chat checks
                     await asyncio.sleep(random.uniform(3, 8))
 
                     game = self.game_manager.get_game(room_id)
                     if game is None or game.phase != GamePhase.DAY:
                         break
 
-                    current_time = time.time()
-
                     # Let each AI decide if they want to chat
-                    for ai_id, mock_ai in list(self.ai_players.get(room_id, {}).items()):
+                    for ai_id, ai_player in list(self.ai_players.get(room_id, {}).items()):
                         player = game.players.get(ai_id)
                         if player is None or not player.is_alive:
                             continue
 
-                        if mock_ai.should_chat(current_time, phase_start):
-                            # Get other player names for potential mentions
-                            other_names = [
-                                p.name for p in game.players.values()
-                                if p.id != ai_id and p.is_alive
-                            ]
+                        # Stagger between AI players
+                        await asyncio.sleep(
+                            random.uniform(AI_CHAT_STAGGER_MIN, AI_CHAT_STAGGER_MAX)
+                        )
 
-                            message_content = mock_ai.generate_chat_message(other_names)
+                        # Re-check game state
+                        game = self.game_manager.get_game(room_id)
+                        if game is None or game.phase != GamePhase.DAY:
+                            break
 
-                            message = ChatMessage(
-                                player_id=ai_id,
-                                player_name=mock_ai.name,
-                                content=message_content,
-                                timestamp=current_time,
-                            )
+                        message = await self._get_ai_chat_message(
+                            ai_player, game, phase_start
+                        )
+
+                        if message:
                             game.add_message(message)
-
                             await self.sio.emit(
                                 "new_message",
                                 message.model_dump(),
                                 room=room_id,
                             )
-
-                            mock_ai.last_message_time = current_time
-                            mock_ai.messages_sent += 1
-                            logger.debug(f"AI {mock_ai.name} sent: {message_content}")
+                            logger.debug(f"AI {ai_player.name} sent: {message.content}")
 
             except asyncio.CancelledError:
                 pass
@@ -179,6 +273,39 @@ class AIController:
 
         task = asyncio.create_task(chat_loop())
         self.chat_tasks[room_id] = task
+
+    async def _get_ai_chat_message(
+        self,
+        ai_player: AIPlayerType,
+        game,
+        phase_start: float,
+    ) -> ChatMessage | None:
+        """Get chat message from AI player (LLM or Mock)."""
+        current_time = time.time()
+
+        if isinstance(ai_player, LLMPlayer):
+            # Build context and use LLM
+            context = self._build_player_context(ai_player, game)
+            return await ai_player.decide_chat_action(context)
+        else:
+            # Use mock logic
+            if ai_player.should_chat(current_time, phase_start):
+                other_names = [
+                    p.name for p in game.players.values()
+                    if p.id != ai_player.id and p.is_alive
+                ]
+                message_content = ai_player.generate_chat_message(other_names)
+
+                ai_player.last_message_time = current_time
+                ai_player.messages_sent += 1
+
+                return ChatMessage(
+                    player_id=ai_player.id,
+                    player_name=ai_player.name,
+                    content=message_content,
+                    timestamp=current_time,
+                )
+        return None
 
     def _stop_chat_loop(self, room_id: str) -> None:
         """Stop the AI chat task for a room."""
@@ -208,29 +335,49 @@ class AIController:
             if p.role == Role.WEREWOLF and p.is_alive
         ]
 
-        # Stagger AI votes
-        for ai_id, mock_ai in self.ai_players[room_id].items():
+        # Process each AI player with stagger
+        for ai_id, ai_player in self.ai_players[room_id].items():
             player = game.players.get(ai_id)
             if player is None or not player.is_alive:
                 continue
 
-            # Wait a random time before voting
-            # TODO: implement this in a way that doesn't pause the entire game thread
-            #await asyncio.sleep(random.uniform(2, 10))
+            # Stagger AI votes
+            await asyncio.sleep(
+                random.uniform(AI_CHAT_STAGGER_MIN, AI_CHAT_STAGGER_MAX)
+            )
 
             # Check game state still valid
             game = self.game_manager.get_game(room_id)
             if game is None or game.phase != GamePhase.VOTING:
                 break
 
-            # Wolves know each other
-            known_wolves = wolf_ids if mock_ai.team == "mafia" else None
+            # Get valid targets (exclude self and fellow wolves if wolf)
+            if ai_player.team and ai_player.team.value == "mafia":
+                valid_targets = [
+                    p for p in alive_players
+                    if p["id"] != ai_player.id and p["id"] not in wolf_ids
+                ]
+            else:
+                valid_targets = [
+                    p for p in alive_players
+                    if p["id"] != ai_player.id
+                ]
 
-            target_id = mock_ai.choose_vote_target(alive_players, known_wolves)
+            if not valid_targets:
+                continue
+
+            # Get vote target
+            if isinstance(ai_player, LLMPlayer):
+                context = self._build_player_context(ai_player, game)
+                target_id = await ai_player.choose_vote_target(context, valid_targets)
+            else:
+                known_wolves = wolf_ids if ai_player.team and ai_player.team.value == "mafia" else None
+                target_id = ai_player.choose_vote_target(alive_players, known_wolves)
+
             if target_id:
-                success = game.submit_vote(ai_id, target_id)
+                success = game.submit_vote(ai_player.id, target_id)
                 if success:
-                    logger.info(f"AI {mock_ai.name} voted for {target_id}")
+                    logger.info(f"AI {ai_player.name} voted for {target_id}")
                     await self.sio.emit(
                         "vote_update",
                         {"votes": game.get_vote_counts()},
@@ -259,49 +406,126 @@ class AIController:
             if p.role == Role.WEREWOLF and p.is_alive
         ]
 
-        # Stagger AI actions
-        for ai_id, mock_ai in self.ai_players[room_id].items():
+        # Process each AI player with stagger
+        for ai_id, ai_player in self.ai_players[room_id].items():
             player = game.players.get(ai_id)
             if player is None or not player.is_alive:
                 continue
 
-            # Wait a random time before acting
-            # TODO: implement this in a way that doesn't pause the entire game thread
-            #await asyncio.sleep(random.uniform(1, 5))
+            # Skip villagers (no night action)
+            if ai_player.role == Role.VILLAGER:
+                continue
+
+            # Stagger AI actions
+            await asyncio.sleep(
+                random.uniform(AI_CHAT_STAGGER_MIN, AI_CHAT_STAGGER_MAX)
+            )
 
             # Check game state still valid
             game = self.game_manager.get_game(room_id)
             if game is None or game.phase != GamePhase.NIGHT:
                 break
 
-            fellow_wolves = wolf_ids if mock_ai.role == Role.WEREWOLF else None
+            # Get valid targets based on role
+            if ai_player.role == Role.WEREWOLF:
+                valid_targets = [
+                    p for p in alive_players
+                    if p["id"] != ai_player.id and p["id"] not in wolf_ids
+                ]
+            elif ai_player.role == Role.SEER:
+                valid_targets = [
+                    p for p in alive_players
+                    if p["id"] != ai_player.id
+                ]
+            elif ai_player.role == Role.DOCTOR:
+                valid_targets = alive_players  # Can protect anyone including self
+            else:
+                continue
 
-            target_id = mock_ai.choose_night_action_target(alive_players, fellow_wolves)
+            if not valid_targets:
+                continue
+
+            # Get target
+            if isinstance(ai_player, LLMPlayer):
+                context = self._build_player_context(ai_player, game)
+                target_id = await ai_player.choose_night_action_target(context, valid_targets)
+            else:
+                fellow_wolves = wolf_ids if ai_player.role == Role.WEREWOLF else None
+                target_id = ai_player.choose_night_action_target(alive_players, fellow_wolves)
+
             if target_id is None:
                 continue
 
             # Submit action based on role
             success = False
-            if mock_ai.role == Role.WEREWOLF:
-                success = game.submit_werewolf_vote(ai_id, target_id)
+            if ai_player.role == Role.WEREWOLF:
+                success = game.submit_werewolf_vote(ai_player.id, target_id)
                 if success:
                     # Broadcast to other werewolves
-                    for wolf_id in wolf_ids:
-                        if wolf_id in game.players:
+                    for wid in wolf_ids:
+                        if wid in game.players:
                             await self.sio.emit(
                                 "werewolf_vote_update",
                                 {"votes": game.get_werewolf_vote_counts()},
-                                to=wolf_id,
+                                to=wid,
                             )
-            elif mock_ai.role == Role.SEER:
-                success = game.submit_seer_action(ai_id, target_id)
-            elif mock_ai.role == Role.DOCTOR:
-                success = game.submit_doctor_action(ai_id, target_id)
+
+            elif ai_player.role == Role.SEER:
+                success = game.submit_seer_action(ai_player.id, target_id)
+                if success and isinstance(ai_player, LLMPlayer):
+                    # Track seer result
+                    target_player = game.players.get(target_id)
+                    if target_player:
+                        is_wolf = target_player.role == Role.WEREWOLF
+                        ai_player.add_seer_result(target_player.name, is_wolf)
+
+            elif ai_player.role == Role.DOCTOR:
+                success = game.submit_doctor_action(ai_player.id, target_id)
 
             if success:
-                logger.info(f"AI {mock_ai.name} ({mock_ai.role.value}) targeted {target_id}")
+                logger.info(f"AI {ai_player.name} ({ai_player.role.value}) targeted {target_id}")
+
+    async def _update_ai_notes(self, room_id: str) -> None:
+        """Update notes for all LLM AI players."""
+        if not self.use_llm:
+            return
+
+        game = self.game_manager.get_game(room_id)
+        if game is None:
+            return
+
+        if room_id not in self.ai_players:
+            return
+
+        for ai_id, ai_player in self.ai_players[room_id].items():
+            if isinstance(ai_player, LLMPlayer):
+                player = game.players.get(ai_id)
+                if player is None:
+                    continue
+
+                # Stagger note updates
+                await asyncio.sleep(
+                    random.uniform(AI_CHAT_STAGGER_MIN, AI_CHAT_STAGGER_MAX)
+                )
+
+                context = self._build_player_context(ai_player, game)
+                await ai_player.update_notes(context)
+
+                # Save notes to store
+                self.notes_store.save(room_id, ai_id, ai_player.notes)
+
+    def _save_all_notes(self, room_id: str) -> None:
+        """Save all AI notes for a room."""
+        if room_id not in self.ai_players:
+            return
+
+        for ai_id, ai_player in self.ai_players[room_id].items():
+            if hasattr(ai_player, 'notes') and ai_player.notes:
+                self.notes_store.save(room_id, ai_id, ai_player.notes)
 
     def cleanup_room(self, room_id: str) -> None:
         """Clean up AI resources when a room is deleted."""
         self._stop_chat_loop(room_id)
         self.ai_players.pop(room_id, None)
+        # Optionally clear notes (or keep for analysis)
+        self.notes_store.clear_room(room_id)
