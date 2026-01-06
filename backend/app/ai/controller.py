@@ -149,8 +149,9 @@ class AIController:
             self._schedule_ai_votes(room_id, phase_duration)
 
         elif new_phase == GamePhase.NIGHT:
-            # Update notes at end of day/voting, then schedule night actions
-            await self._update_ai_notes(room_id)
+            # Schedule notes updates in background (non-blocking)
+            self._schedule_notes_updates(room_id)
+            # Schedule night actions during the phase
             self._schedule_ai_night_actions(room_id, phase_duration)
 
         elif new_phase == GamePhase.ENDED:
@@ -732,7 +733,7 @@ class AIController:
                 logger.info(f"AI {ai_player.name} ({ai_player.role.value}) targeted {target_id}")
 
     async def _update_ai_notes(self, room_id: str) -> None:
-        """Update notes for all LLM AI players."""
+        """Update notes for all LLM AI players (blocking - only use at game end)."""
         if not self.use_llm:
             return
 
@@ -760,6 +761,57 @@ class AIController:
 
                 # Save notes to store
                 self.notes_store.save(room_id, ai_id, ai_player.notes)
+
+    async def _update_single_ai_notes(self, room_id: str, ai_id: str, ai_player: LLMPlayer) -> None:
+        """Update notes for a single AI player."""
+        try:
+            game = self.game_manager.get_game(room_id)
+            if game is None:
+                return
+
+            context = self._build_player_context(ai_player, game)
+            await ai_player.update_notes(context)
+
+            # Save notes to store
+            self.notes_store.save(room_id, ai_id, ai_player.notes)
+        except Exception as e:
+            logger.warning(f"Failed to update notes for {ai_player.name}: {e}")
+
+    def _schedule_notes_updates(self, room_id: str) -> None:
+        """Schedule AI notes updates as background task (non-blocking).
+
+        Notes are updated in parallel using asyncio.gather() and run as a
+        background task during the NIGHT phase. This prevents blocking the
+        phase transition while still ensuring notes are fresh for the next
+        DAY phase.
+        """
+        if not self.use_llm:
+            return
+
+        game = self.game_manager.get_game(room_id)
+        if game is None:
+            return
+
+        async def update_all_notes():
+            try:
+                # Gather all update tasks
+                tasks = []
+                for ai_id, ai_player in self.ai_players.get(room_id, {}).items():
+                    if isinstance(ai_player, LLMPlayer):
+                        player = game.players.get(ai_id)
+                        if player is not None:
+                            tasks.append(self._update_single_ai_notes(room_id, ai_id, ai_player))
+
+                # Run all in parallel
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    logger.info(f"Updated notes for {len(tasks)} AI players in room {room_id}")
+
+            except Exception as e:
+                logger.error(f"Error updating AI notes: {e}", exc_info=True)
+
+        # Schedule as background task
+        asyncio.create_task(update_all_notes())
 
     def _save_all_notes(self, room_id: str) -> None:
         """Save all AI notes for a room."""
