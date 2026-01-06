@@ -16,7 +16,18 @@
 	let isAlive = $derived(myPlayer?.is_alive ?? true);
 	let isSpectating = $derived(!isAlive && $gameState?.phase !== 'lobby' && $gameState?.phase !== 'ended');
 
-	let aiCount = $state(6);
+	// Track AI count from game state
+	let currentAICount = $derived($gameState?.players.filter((p) => p.player_type === 'ai').length ?? 0);
+	let isInitialized = $state(false);
+
+	// Initialize AI count when joining lobby
+	$effect(() => {
+		if ($gameState?.phase === 'lobby' && isHost && !isInitialized && currentAICount === 0) {
+			isInitialized = true;
+			// Set AI count to default on first load
+			$socket?.emit('set_ai_count', { count: 6 });
+		}
+	});
 
 	function startGame() {
 		$socket?.emit('start_game');
@@ -26,8 +37,12 @@
 		$socket?.emit('skip_to_voting');
 	}
 
-	function addAIPlayers() {
-		$socket?.emit('add_ai_player', { count: aiCount });
+	function handleAICountChange(event: Event) {
+		const target = event.target as HTMLInputElement;
+		const newCount = parseInt(target.value);
+		if (!isNaN(newCount) && newCount >= 0 && newCount <= 20) {
+			$socket?.emit('set_ai_count', { count: newCount });
+		}
 	}
 </script>
 
@@ -36,6 +51,8 @@
 {#if $gameEndData}
 	<GameEndScreen />
 {/if}
+
+<svelte:window on:keydown|preventDefault={(e) => e.key === 'Enter' && startGame()}/>
 
 <div class="game-container">
 	<header>
@@ -62,12 +79,12 @@
 					<input
 						id="ai-count"
 						type="number"
-						bind:value={aiCount}
-						min="1"
+						value={currentAICount}
+						oninput={handleAICountChange}
+						min="0"
 						max="20"
 						class="ai-count-input"
 					/>
-					<button class="add-ai-btn" onclick={addAIPlayers}>Add AI</button>
 				</div>
 				<button class="start-btn" onclick={startGame}>Start Game</button>
 			{/if}
@@ -140,10 +157,6 @@
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
-		background-color: var(--bg-tertiary);
-		padding: 0.5rem;
-		border-radius: 4px;
-		border: 1px solid var(--accent);
 	}
 
 	.ai-controls label {
@@ -152,8 +165,8 @@
 	}
 
 	.ai-count-input {
-		width: 60px;
-		padding: 0.25rem 0.5rem;
+		width: 70px;
+		padding: 0.5rem;
 		border: 1px solid var(--text-secondary);
 		border-radius: 4px;
 		background-color: var(--bg-secondary);
@@ -165,6 +178,7 @@
 	.ai-count-input:focus {
 		outline: 2px solid var(--accent);
 		outline-offset: 1px;
+		border-color: var(--accent);
 	}
 
 	.start-btn {
@@ -192,20 +206,6 @@
 
 	.skip-btn:hover {
 		background-color: var(--bg-secondary);
-	}
-
-	.add-ai-btn {
-		background-color: var(--bg-secondary);
-		color: var(--text-primary);
-		border: none;
-		padding: 0.25rem 0.75rem;
-		border-radius: 4px;
-		cursor: pointer;
-		font-size: 0.9rem;
-	}
-
-	.add-ai-btn:hover {
-		opacity: 0.9;
 	}
 
 	.spectator-badge {

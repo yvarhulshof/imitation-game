@@ -2,7 +2,7 @@
 	import { playerName } from '$lib/stores/game';
 	import { getSocket, connected } from '$lib/stores/socket';
 
-	let nameInput = $state('');
+	let nameInput = $state('Yvar');
 	let roomInput = $state('');
 	let error = $state('');
 
@@ -69,14 +69,28 @@
 		<div class="form">
 			<input type="text" bind:value={nameInput} placeholder="Your name" />
 
-			<div class="buttons">
+			<form class="buttons" on:submit|preventDefault={createRoom}>
+				<button type="submit">Create Room</button>
+				<span class="or">or</span>
+				<div class="join-group">
+					<input
+						type="text"
+						bind:value={roomInput}
+						placeholder="Room code"
+					/>
+				<button type="button" on:click={joinRoom}>Join</button>
+				</div>
+			</form>
+
+			
+			<!-- <div class="buttons">
 				<button onclick={createRoom}>Create Room</button>
 				<span class="or">or</span>
 				<div class="join-group">
 					<input type="text" bind:value={roomInput} placeholder="Room code" />
 					<button onclick={joinRoom}>Join</button>
 				</div>
-			</div>
+			</div> -->
 
 			{#if error}
 				<p class="error">{error}</p>
@@ -84,6 +98,8 @@
 		</div>
 	{/if}
 </div>
+
+<svelte:window on:keydown|preventDefault={(e) => e.key === 'Enter' && createRoom()}/>
 
 <style>
 	.lobby {
