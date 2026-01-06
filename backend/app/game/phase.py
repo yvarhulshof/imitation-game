@@ -12,10 +12,7 @@ logger = logging.getLogger(__name__)
 # Phase durations in seconds
 # NOTE: set to 10 for dev purposes
 PHASE_DURATIONS = {
-    # GamePhase.DAY: 90,
-    # GamePhase.VOTING: 30,
-    # GamePhase.NIGHT: 30,
-    GamePhase.DAY: 10,
+    GamePhase.DAY: 90,
     GamePhase.VOTING: 10,
     GamePhase.NIGHT: 10,
 }
@@ -106,9 +103,9 @@ class PhaseController:
             room=room_id,
         )
 
-        # Notify AI controller of phase change
+        # Notify AI controller of phase change (with duration for scheduling)
         if self.ai_controller:
-            await self.ai_controller.on_phase_change(room_id, phase)
+            await self.ai_controller.on_phase_change(room_id, phase, duration)
 
         # Schedule next phase transition
         if duration > 0:

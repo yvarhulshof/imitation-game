@@ -31,6 +31,8 @@ class AIController:
         self.ai_players: dict[str, dict[str, AIPlayerType]] = {}
         # room_id -> asyncio.Task (for chat loops)
         self.chat_tasks: dict[str, asyncio.Task] = {}
+        # room_id -> asyncio.Task (for scheduled actions)
+        self.action_tasks: dict[str, list[asyncio.Task]] = {}
         # Shared LLM client for all AI players
         self.llm_client = LLMClient() if GOOGLE_API_KEY else None
         # Notes persistence
@@ -123,8 +125,14 @@ class AIController:
                 ai_player.set_role(player.role, player.team)
                 logger.info(f"AI {ai_player.name} assigned role {player.role.value}")
 
-    async def on_phase_change(self, room_id: str, new_phase: GamePhase) -> None:
-        """Called when phase changes - trigger AI actions."""
+    async def on_phase_change(self, room_id: str, new_phase: GamePhase, phase_duration: int = 0) -> None:
+        """Called when phase changes - trigger AI actions.
+
+        Args:
+            room_id: The room ID
+            new_phase: The new phase
+            phase_duration: Duration of the phase in seconds (for scheduling actions)
+        """
         if room_id not in self.ai_players:
             return
 
@@ -136,18 +144,19 @@ class AIController:
             await self._start_chat_loop(room_id)
 
         elif new_phase == GamePhase.VOTING:
-            # Stop chat and submit votes
+            # Stop chat and schedule votes to happen during the phase
             self._stop_chat_loop(room_id)
-            await self._submit_ai_votes(room_id)
+            self._schedule_ai_votes(room_id, phase_duration)
 
         elif new_phase == GamePhase.NIGHT:
-            # Update notes at end of day/voting, then submit night actions
+            # Update notes at end of day/voting, then schedule night actions
             await self._update_ai_notes(room_id)
-            await self._submit_ai_night_actions(room_id)
+            self._schedule_ai_night_actions(room_id, phase_duration)
 
         elif new_phase == GamePhase.ENDED:
             # Cleanup
             self._stop_chat_loop(room_id)
+            self._cancel_action_tasks(room_id)
             await self._update_ai_notes(room_id)  # Final notes update
             self._save_all_notes(room_id)
 
@@ -231,7 +240,7 @@ class AIController:
             try:
                 while True:
                     # Random interval between chat checks
-                    await asyncio.sleep(random.uniform(3, 8))
+                    await asyncio.sleep(random.uniform(10, 15))
 
                     game = self.game_manager.get_game(room_id)
                     if game is None or game.phase != GamePhase.DAY:
@@ -312,6 +321,242 @@ class AIController:
         if room_id in self.chat_tasks:
             self.chat_tasks[room_id].cancel()
             del self.chat_tasks[room_id]
+
+    def _cancel_action_tasks(self, room_id: str) -> None:
+        """Cancel all scheduled action tasks for a room."""
+        if room_id in self.action_tasks:
+            for task in self.action_tasks[room_id]:
+                if not task.done():
+                    task.cancel()
+            del self.action_tasks[room_id]
+
+    def _schedule_ai_votes(self, room_id: str, phase_duration: int) -> None:
+        """Schedule AI votes to happen during the voting phase.
+
+        AIs will submit votes at random times between 50-90% of the phase duration.
+        This prevents blocking at phase start and allows votes to be submitted
+        naturally throughout the phase.
+        """
+        self._cancel_action_tasks(room_id)  # Clear any existing tasks
+
+        if room_id not in self.ai_players:
+            return
+
+        game = self.game_manager.get_game(room_id)
+        if game is None:
+            return
+
+        if room_id not in self.action_tasks:
+            self.action_tasks[room_id] = []
+
+        # Schedule each AI to vote at a random time during the phase
+        for ai_id, ai_player in self.ai_players[room_id].items():
+            player = game.players.get(ai_id)
+            if player is None or not player.is_alive:
+                continue
+
+            # Random delay between 50-90% of phase duration
+            delay = random.uniform(phase_duration * 0.5, phase_duration * 0.9)
+
+            async def submit_vote_task(ai_id=ai_id, ai_player=ai_player):
+                try:
+                    await asyncio.sleep(delay)
+
+                    # Check game state is still valid
+                    game = self.game_manager.get_game(room_id)
+                    if game is None or game.phase != GamePhase.VOTING:
+                        return
+
+                    player = game.players.get(ai_id)
+                    if player is None or not player.is_alive:
+                        return
+
+                    # Get valid vote targets
+                    await self._submit_single_ai_vote(room_id, game, ai_player)
+
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    logger.error(f"Error in scheduled AI vote for {ai_player.name}: {e}", exc_info=True)
+
+            task = asyncio.create_task(submit_vote_task())
+            self.action_tasks[room_id].append(task)
+
+    def _schedule_ai_night_actions(self, room_id: str, phase_duration: int) -> None:
+        """Schedule AI night actions to happen during the night phase.
+
+        AIs will submit actions at random times between 40-80% of the phase duration.
+        """
+        self._cancel_action_tasks(room_id)  # Clear any existing tasks
+
+        if room_id not in self.ai_players:
+            return
+
+        game = self.game_manager.get_game(room_id)
+        if game is None:
+            return
+
+        if room_id not in self.action_tasks:
+            self.action_tasks[room_id] = []
+
+        # Schedule each AI to act at a random time during the phase
+        for ai_id, ai_player in self.ai_players[room_id].items():
+            player = game.players.get(ai_id)
+            if player is None or not player.is_alive:
+                continue
+
+            # Skip villagers (no night action)
+            if ai_player.role == Role.VILLAGER:
+                continue
+
+            # Random delay between 40-80% of phase duration
+            delay = random.uniform(phase_duration * 0.4, phase_duration * 0.8)
+
+            async def submit_action_task(ai_id=ai_id, ai_player=ai_player):
+                try:
+                    await asyncio.sleep(delay)
+
+                    # Check game state is still valid
+                    game = self.game_manager.get_game(room_id)
+                    if game is None or game.phase != GamePhase.NIGHT:
+                        return
+
+                    player = game.players.get(ai_id)
+                    if player is None or not player.is_alive:
+                        return
+
+                    # Submit night action
+                    await self._submit_single_ai_night_action(room_id, game, ai_player)
+
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    logger.error(f"Error in scheduled AI night action for {ai_player.name}: {e}", exc_info=True)
+
+            task = asyncio.create_task(submit_action_task())
+            self.action_tasks[room_id].append(task)
+
+    async def _submit_single_ai_vote(self, room_id: str, game, ai_player: AIPlayerType) -> None:
+        """Submit a vote for a single AI player."""
+        # Get alive players
+        alive_players = [
+            {"id": p.id, "name": p.name}
+            for p in game.players.values()
+            if p.is_alive
+        ]
+
+        # Get wolf IDs for coordination
+        wolf_ids = [
+            p.id for p in game.players.values()
+            if p.role == Role.WEREWOLF and p.is_alive
+        ]
+
+        # Get valid targets (exclude self and fellow wolves if wolf)
+        if ai_player.team and ai_player.team.value == "mafia":
+            valid_targets = [
+                p for p in alive_players
+                if p["id"] != ai_player.id and p["id"] not in wolf_ids
+            ]
+        else:
+            valid_targets = [
+                p for p in alive_players
+                if p["id"] != ai_player.id
+            ]
+
+        if not valid_targets:
+            return
+
+        # Get vote target
+        if isinstance(ai_player, LLMPlayer):
+            context = self._build_player_context(ai_player, game)
+            target_id = await ai_player.choose_vote_target(context, valid_targets)
+        else:
+            known_wolves = wolf_ids if ai_player.team and ai_player.team.value == "mafia" else None
+            target_id = ai_player.choose_vote_target(alive_players, known_wolves)
+
+        if target_id:
+            success = game.submit_vote(ai_player.id, target_id)
+            if success:
+                logger.info(f"AI {ai_player.name} voted for {target_id}")
+                await self.sio.emit(
+                    "vote_update",
+                    {"votes": game.get_vote_counts()},
+                    room=room_id,
+                )
+
+    async def _submit_single_ai_night_action(self, room_id: str, game, ai_player: AIPlayerType) -> None:
+        """Submit a night action for a single AI player."""
+        # Get alive players
+        alive_players = [
+            {"id": p.id, "name": p.name}
+            for p in game.players.values()
+            if p.is_alive
+        ]
+
+        # Get wolf IDs
+        wolf_ids = [
+            p.id for p in game.players.values()
+            if p.role == Role.WEREWOLF and p.is_alive
+        ]
+
+        # Get valid targets based on role
+        if ai_player.role == Role.WEREWOLF:
+            valid_targets = [
+                p for p in alive_players
+                if p["id"] != ai_player.id and p["id"] not in wolf_ids
+            ]
+        elif ai_player.role == Role.SEER:
+            valid_targets = [
+                p for p in alive_players
+                if p["id"] != ai_player.id
+            ]
+        elif ai_player.role == Role.DOCTOR:
+            valid_targets = alive_players  # Can protect anyone including self
+        else:
+            return
+
+        if not valid_targets:
+            return
+
+        # Get target
+        if isinstance(ai_player, LLMPlayer):
+            context = self._build_player_context(ai_player, game)
+            target_id = await ai_player.choose_night_action_target(context, valid_targets)
+        else:
+            fellow_wolves = wolf_ids if ai_player.role == Role.WEREWOLF else None
+            target_id = ai_player.choose_night_action_target(alive_players, fellow_wolves)
+
+        if target_id is None:
+            return
+
+        # Submit action based on role
+        success = False
+        if ai_player.role == Role.WEREWOLF:
+            success = game.submit_werewolf_vote(ai_player.id, target_id)
+            if success:
+                # Broadcast to other werewolves
+                for wid in wolf_ids:
+                    if wid in game.players:
+                        await self.sio.emit(
+                            "werewolf_vote_update",
+                            {"votes": game.get_werewolf_vote_counts()},
+                            to=wid,
+                        )
+
+        elif ai_player.role == Role.SEER:
+            success = game.submit_seer_action(ai_player.id, target_id)
+            if success and isinstance(ai_player, LLMPlayer):
+                # Track seer result
+                target_player = game.players.get(target_id)
+                if target_player:
+                    is_wolf = target_player.role == Role.WEREWOLF
+                    ai_player.add_seer_result(target_player.name, is_wolf)
+
+        elif ai_player.role == Role.DOCTOR:
+            success = game.submit_doctor_action(ai_player.id, target_id)
+
+        if success:
+            logger.info(f"AI {ai_player.name} ({ai_player.role.value}) targeted {target_id}")
 
     async def _submit_ai_votes(self, room_id: str) -> None:
         """Have AI players submit their votes."""
@@ -417,9 +662,10 @@ class AIController:
                 continue
 
             # Stagger AI actions
-            await asyncio.sleep(
-                random.uniform(AI_CHAT_STAGGER_MIN, AI_CHAT_STAGGER_MAX)
-            )
+            # NOTE: commented out, seems to be unnecessary and annoying
+            # await asyncio.sleep(
+            #     random.uniform(AI_CHAT_STAGGER_MIN, AI_CHAT_STAGGER_MAX)
+            # )
 
             # Check game state still valid
             game = self.game_manager.get_game(room_id)
@@ -504,9 +750,10 @@ class AIController:
                     continue
 
                 # Stagger note updates
-                await asyncio.sleep(
-                    random.uniform(AI_CHAT_STAGGER_MIN, AI_CHAT_STAGGER_MAX)
-                )
+                #NOTE: commented out, seems to be unnecessary and annoying
+                # await asyncio.sleep(
+                #     random.uniform(AI_CHAT_STAGGER_MIN, AI_CHAT_STAGGER_MAX)
+                # )
 
                 context = self._build_player_context(ai_player, game)
                 await ai_player.update_notes(context)
@@ -526,6 +773,7 @@ class AIController:
     def cleanup_room(self, room_id: str) -> None:
         """Clean up AI resources when a room is deleted."""
         self._stop_chat_loop(room_id)
+        self._cancel_action_tasks(room_id)
         self.ai_players.pop(room_id, None)
         # Optionally clear notes (or keep for analysis)
         self.notes_store.clear_room(room_id)

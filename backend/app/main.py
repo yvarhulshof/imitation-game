@@ -15,7 +15,7 @@ from app.ai.controller import AIController
 # Create Socket.IO server
 sio = socketio.AsyncServer(
     async_mode="asgi",
-    cors_allowed_origins=["http://localhost:5173"],  # Svelte dev server
+    cors_allowed_origins=["http://localhost:5173", "http://localhost:5174"],  # Svelte dev server
 )
 
 # Create FastAPI app
@@ -23,7 +23,7 @@ app = FastAPI(title="Imitation Game API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "http://localhost:5174"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
