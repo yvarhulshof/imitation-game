@@ -229,7 +229,7 @@ def register_events(
 
     @sio.event
     async def add_ai_player(sid, data=None):
-        """Add an AI player to the room."""
+        """Add AI player(s) to the room."""
         if ai_controller is None:
             return {"success": False, "error": "AI not available"}
 
@@ -248,18 +248,42 @@ def register_events(
         if game.phase != GamePhase.LOBBY:
             return {"success": False, "error": "Can only add AI players in lobby"}
 
-        ai_player = ai_controller.add_ai_player(room_id)
-        if ai_player is None:
-            return {"success": False, "error": "Could not add AI player"}
+        # Get count from data, default to 1 for backward compatibility
+        count = 1
+        if data and isinstance(data, dict):
+            count = data.get("count", 1)
 
-        # Notify all players in room
-        await sio.emit(
-            "player_joined",
-            {"player_id": ai_player.id, "player_name": ai_player.name},
-            room=room_id,
-        )
+        # Validate count
+        if not isinstance(count, int) or count < 1:
+            return {"success": False, "error": "Invalid count"}
+        if count > 20:
+            return {"success": False, "error": "Cannot add more than 20 AI players at once"}
 
-        return {"success": True, "player": ai_player.model_dump()}
+        # Add AI players
+        added_players = []
+        for _ in range(count):
+            ai_player = ai_controller.add_ai_player(room_id)
+            if ai_player is None:
+                # Stop if we can't add more
+                break
+
+            added_players.append(ai_player)
+
+            # Notify all players in room
+            await sio.emit(
+                "player_joined",
+                {"player_id": ai_player.id, "player_name": ai_player.name},
+                room=room_id,
+            )
+
+        if not added_players:
+            return {"success": False, "error": "Could not add AI players"}
+
+        return {
+            "success": True,
+            "count": len(added_players),
+            "players": [p.model_dump() for p in added_players]
+        }
 
     @sio.event
     async def remove_ai_player(sid, data):

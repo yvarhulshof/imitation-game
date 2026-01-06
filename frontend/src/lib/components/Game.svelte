@@ -16,6 +16,8 @@
 	let isAlive = $derived(myPlayer?.is_alive ?? true);
 	let isSpectating = $derived(!isAlive && $gameState?.phase !== 'lobby' && $gameState?.phase !== 'ended');
 
+	let aiCount = $state(6);
+
 	function startGame() {
 		$socket?.emit('start_game');
 	}
@@ -24,8 +26,8 @@
 		$socket?.emit('skip_to_voting');
 	}
 
-	function addAIPlayer() {
-		$socket?.emit('add_ai_player');
+	function addAIPlayers() {
+		$socket?.emit('add_ai_player', { count: aiCount });
 	}
 </script>
 
@@ -55,7 +57,18 @@
 		{/if}
 		<div class="header-actions">
 			{#if isHost && $gameState?.phase === 'lobby'}
-				<button class="add-ai-btn" onclick={addAIPlayer}>+ Add AI</button>
+				<div class="ai-controls">
+					<label for="ai-count">AI Players:</label>
+					<input
+						id="ai-count"
+						type="number"
+						bind:value={aiCount}
+						min="1"
+						max="20"
+						class="ai-count-input"
+					/>
+					<button class="add-ai-btn" onclick={addAIPlayers}>Add AI</button>
+				</div>
 				<button class="start-btn" onclick={startGame}>Start Game</button>
 			{/if}
 			{#if isHost && $gameState?.phase === 'day'}
@@ -120,6 +133,38 @@
 		margin-left: auto;
 		display: flex;
 		gap: 0.5rem;
+		align-items: center;
+	}
+
+	.ai-controls {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		background-color: var(--bg-tertiary);
+		padding: 0.5rem;
+		border-radius: 4px;
+		border: 1px solid var(--accent);
+	}
+
+	.ai-controls label {
+		color: var(--text-secondary);
+		font-size: 0.9rem;
+	}
+
+	.ai-count-input {
+		width: 60px;
+		padding: 0.25rem 0.5rem;
+		border: 1px solid var(--text-secondary);
+		border-radius: 4px;
+		background-color: var(--bg-secondary);
+		color: var(--text-primary);
+		font-size: 0.9rem;
+		text-align: center;
+	}
+
+	.ai-count-input:focus {
+		outline: 2px solid var(--accent);
+		outline-offset: 1px;
 	}
 
 	.start-btn {
@@ -150,16 +195,17 @@
 	}
 
 	.add-ai-btn {
-		background-color: var(--bg-tertiary);
+		background-color: var(--bg-secondary);
 		color: var(--text-primary);
-		border: 1px solid var(--accent);
-		padding: 0.5rem 1rem;
+		border: none;
+		padding: 0.25rem 0.75rem;
 		border-radius: 4px;
 		cursor: pointer;
+		font-size: 0.9rem;
 	}
 
 	.add-ai-btn:hover {
-		background-color: var(--bg-secondary);
+		opacity: 0.9;
 	}
 
 	.spectator-badge {
