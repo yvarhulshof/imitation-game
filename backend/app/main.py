@@ -1,16 +1,32 @@
 import logging
 import socketio
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logs_dir = Path("logs")
+logs_dir.mkdir(exist_ok=True)
+
+# Configure root logger
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Console
+        logging.FileHandler(logs_dir / "game.log")  # File
+    ]
+)
+
+# Debug logging for phase transitions
 logging.getLogger("app.game.phase").setLevel(logging.DEBUG)
 
 from app.game.manager import GameManager
 from app.game.phase import PhaseController
 from app.game.events import register_events
 from app.ai.controller import AIController
+from app.ai.reasoning_logger import ReasoningLogger
+from app.ai.dashboard import AIDashboard
 
 # Create Socket.IO server
 sio = socketio.AsyncServer(
@@ -32,8 +48,17 @@ app.add_middleware(
 # Game state manager
 game_manager = GameManager()
 
-# AI controller
-ai_controller = AIController(sio, game_manager)
+# Create dashboard
+dashboard = AIDashboard(output_dir=str(logs_dir / "dashboard"))
+
+# Create reasoning logger (with dashboard)
+reasoning_logger = ReasoningLogger(
+    logs_dir=str(logs_dir / "reasoning"),
+    dashboard=dashboard
+)
+
+# AI controller (with reasoning logger)
+ai_controller = AIController(sio, game_manager, reasoning_logger=reasoning_logger)
 
 # Phase controller (with AI integration)
 phase_controller = PhaseController(sio, game_manager, ai_controller)

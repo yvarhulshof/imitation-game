@@ -18,6 +18,11 @@ from app.ai.prompts import (
 )
 from app.config import MAX_NOTES_TOKENS
 
+# Type hint for reasoning_logger
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from app.ai.reasoning_logger import ReasoningLogger
+
 logger = logging.getLogger(__name__)
 
 
@@ -136,12 +141,14 @@ class LLMPlayer:
         llm_client: LLMClient | None = None,
         role: Role | None = None,
         team: Team | None = None,
+        reasoning_logger: "ReasoningLogger | None" = None,
     ):
         self.id = player_id
         self.name = name
         self.role = role
         self.team = team
         self.llm_client = llm_client or LLMClient()
+        self.reasoning_logger = reasoning_logger
         self.notes = ""
         self.strategy = ""
         self.seer_results: list[dict] = []  # Track seer investigation results
@@ -212,10 +219,26 @@ class LLMPlayer:
 
             if isinstance(response, dict) and response.get("send"):
                 message_content = response.get("message", "")
+                reasoning = response.get("reasoning", "")
                 if message_content:
                     self.messages_sent += 1
                     self.last_message_time = time.time()
-                    logger.debug(f"LLM {self.name} decided to chat: {message_content}")
+                    logger.info(f"LLM {self.name} decided to chat: {message_content} (reasoning: {reasoning})")
+
+                    # Log to reasoning logger
+                    if self.reasoning_logger and context.get("room_id"):
+                        self.reasoning_logger.log_decision(
+                            room_id=context["room_id"],
+                            player_id=self.id,
+                            player_name=self.name,
+                            decision_type="chat",
+                            phase=context.get("phase").value if context.get("phase") else "unknown",
+                            round_num=context.get("round_number", 0),
+                            reasoning=reasoning,
+                            choice=message_content,
+                            send=True
+                        )
+
                     return ChatMessage(
                         player_id=self.id,
                         player_name=self.name,
@@ -256,6 +279,22 @@ class LLMPlayer:
                 # Extract valid target ID from response
                 valid_ids = [t["id"] for t in valid_targets]
                 target_id = extract_target_id(raw_target, valid_ids)
+
+                # Log to reasoning logger
+                if self.reasoning_logger and context.get("room_id"):
+                    self.reasoning_logger.log_decision(
+                        room_id=context["room_id"],
+                        player_id=self.id,
+                        player_name=self.name,
+                        decision_type="vote",
+                        phase=context.get("phase").value if context.get("phase") else "unknown",
+                        round_num=context.get("round_number", 0),
+                        reasoning=reasoning,
+                        choice=target_id,
+                        raw_target=raw_target,
+                        valid_targets=valid_ids
+                    )
+
                 if target_id:
                     return target_id
                 else:
@@ -301,6 +340,23 @@ class LLMPlayer:
                 # Extract valid target ID from response
                 valid_ids = [t["id"] for t in valid_targets]
                 target_id = extract_target_id(raw_target, valid_ids)
+
+                # Log to reasoning logger
+                if self.reasoning_logger and context.get("room_id"):
+                    self.reasoning_logger.log_decision(
+                        room_id=context["room_id"],
+                        player_id=self.id,
+                        player_name=self.name,
+                        decision_type="night_action",
+                        phase=context.get("phase").value if context.get("phase") else "unknown",
+                        round_num=context.get("round_number", 0),
+                        reasoning=reasoning,
+                        choice=target_id,
+                        role=self.role.value if self.role else "unknown",
+                        raw_target=raw_target,
+                        valid_targets=valid_ids
+                    )
+
                 if target_id:
                     return target_id
                 else:
@@ -324,7 +380,18 @@ class LLMPlayer:
 
             if isinstance(new_notes, str):
                 self.notes = truncate_to_tokens(new_notes, MAX_NOTES_TOKENS)
-                logger.debug(f"LLM {self.name} updated notes ({len(self.notes)} chars)")
+                logger.info(f"LLM {self.name} updated notes ({len(self.notes)} chars)")
+
+                # Log to reasoning logger
+                if self.reasoning_logger and context.get("room_id"):
+                    self.reasoning_logger.log_notes_update(
+                        room_id=context["room_id"],
+                        player_id=self.id,
+                        player_name=self.name,
+                        phase=context.get("phase").value if context.get("phase") else "unknown",
+                        round_num=context.get("round_number", 0),
+                        notes=self.notes
+                    )
 
         except LLMError as e:
             logger.warning(f"LLM notes update failed for {self.name}: {e}")

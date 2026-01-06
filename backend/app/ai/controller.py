@@ -24,7 +24,7 @@ AIPlayerType = Union[LLMPlayer, MockAIPlayer]
 class AIController:
     """Controls AI player behavior during game phases."""
 
-    def __init__(self, sio: socketio.AsyncServer, game_manager: GameManager):
+    def __init__(self, sio: socketio.AsyncServer, game_manager: GameManager, reasoning_logger=None):
         self.sio = sio
         self.game_manager = game_manager
         # room_id -> {player_id: AIPlayerType}
@@ -39,6 +39,8 @@ class AIController:
         self.notes_store = NotesStore()
         # Use LLM mode if API key is configured
         self.use_llm = bool(GOOGLE_API_KEY)
+        # Reasoning logger for AI decision logging
+        self.reasoning_logger = reasoning_logger
 
         if self.use_llm:
             logger.info("AI Controller initialized with LLM mode")
@@ -78,7 +80,12 @@ class AIController:
             self.ai_players[room_id] = {}
 
         if self.use_llm:
-            ai_player = LLMPlayer(ai_id, ai_name, llm_client=self.llm_client)
+            ai_player = LLMPlayer(
+                ai_id,
+                ai_name,
+                llm_client=self.llm_client,
+                reasoning_logger=self.reasoning_logger
+            )
             # Load any existing notes
             existing_notes = self.notes_store.load(room_id, ai_id)
             if existing_notes:
@@ -165,6 +172,7 @@ class AIController:
         self,
         ai_player: AIPlayerType,
         game,
+        room_id: str,
         additional_context: dict | None = None,
     ) -> dict:
         """Build context dict for AI player decisions."""
@@ -202,6 +210,7 @@ class AIController:
         ]
 
         context = {
+            "room_id": room_id,
             "player_id": ai_player.id,
             "player_name": ai_player.name,
             "role": ai_player.role,
@@ -264,7 +273,7 @@ class AIController:
                             break
 
                         message = await self._get_ai_chat_message(
-                            ai_player, game, phase_start
+                            ai_player, game, room_id, phase_start
                         )
 
                         if message:
@@ -288,6 +297,7 @@ class AIController:
         self,
         ai_player: AIPlayerType,
         game,
+        room_id: str,
         phase_start: float,
     ) -> ChatMessage | None:
         """Get chat message from AI player (LLM or Mock)."""
@@ -295,7 +305,7 @@ class AIController:
 
         if isinstance(ai_player, LLMPlayer):
             # Build context and use LLM
-            context = self._build_player_context(ai_player, game)
+            context = self._build_player_context(ai_player, game, room_id)
             return await ai_player.decide_chat_action(context)
         else:
             # Use mock logic
@@ -469,7 +479,7 @@ class AIController:
 
         # Get vote target
         if isinstance(ai_player, LLMPlayer):
-            context = self._build_player_context(ai_player, game)
+            context = self._build_player_context(ai_player, game, room_id)
             target_id = await ai_player.choose_vote_target(context, valid_targets)
         else:
             known_wolves = wolf_ids if ai_player.team and ai_player.team.value == "mafia" else None
@@ -521,7 +531,7 @@ class AIController:
 
         # Get target
         if isinstance(ai_player, LLMPlayer):
-            context = self._build_player_context(ai_player, game)
+            context = self._build_player_context(ai_player, game, room_id)
             target_id = await ai_player.choose_night_action_target(context, valid_targets)
         else:
             fellow_wolves = wolf_ids if ai_player.role == Role.WEREWOLF else None
@@ -614,7 +624,7 @@ class AIController:
 
             # Get vote target
             if isinstance(ai_player, LLMPlayer):
-                context = self._build_player_context(ai_player, game)
+                context = self._build_player_context(ai_player, game, room_id)
                 target_id = await ai_player.choose_vote_target(context, valid_targets)
             else:
                 known_wolves = wolf_ids if ai_player.team and ai_player.team.value == "mafia" else None
@@ -694,7 +704,7 @@ class AIController:
 
             # Get target
             if isinstance(ai_player, LLMPlayer):
-                context = self._build_player_context(ai_player, game)
+                context = self._build_player_context(ai_player, game, room_id)
                 target_id = await ai_player.choose_night_action_target(context, valid_targets)
             else:
                 fellow_wolves = wolf_ids if ai_player.role == Role.WEREWOLF else None
@@ -756,7 +766,7 @@ class AIController:
                 #     random.uniform(AI_CHAT_STAGGER_MIN, AI_CHAT_STAGGER_MAX)
                 # )
 
-                context = self._build_player_context(ai_player, game)
+                context = self._build_player_context(ai_player, game, room_id)
                 await ai_player.update_notes(context)
 
                 # Save notes to store
@@ -769,7 +779,7 @@ class AIController:
             if game is None:
                 return
 
-            context = self._build_player_context(ai_player, game)
+            context = self._build_player_context(ai_player, game, room_id)
             await ai_player.update_notes(context)
 
             # Save notes to store
@@ -827,5 +837,10 @@ class AIController:
         self._stop_chat_loop(room_id)
         self._cancel_action_tasks(room_id)
         self.ai_players.pop(room_id, None)
+
+        # Clean up reasoning logger
+        if self.reasoning_logger:
+            self.reasoning_logger.cleanup_room(room_id)
+
         # Optionally clear notes (or keep for analysis)
         self.notes_store.clear_room(room_id)
