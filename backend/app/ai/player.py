@@ -28,10 +28,12 @@ logger = logging.getLogger(__name__)
 
 # Random AI names
 AI_NAMES = [
-    "Alex", "Jordan", "Taylor", "Morgan", "Casey",
-    "Riley", "Quinn", "Avery", "Blake", "Cameron",
-    "Dakota", "Emery", "Finley", "Hayden", "Jamie",
+    "Alice", "Bob", "Carol", "Dave", "Eve", "Frank", "Grace", "Heidi",
+    "Ivan", "Judy", "Karl", "Laura", "Mallory", "Nick", "Olivia", "Peggy",
+    "Quentin", "Rupert", "Sybil", "Trent", "Uma", "Victor", "Walter",
+    "Xavier", "Yvonne", "Zach"
 ]
+
 
 # Pre-defined chat messages by situation (used for fallback)
 DAY_CHAT_MESSAGES = {
@@ -83,11 +85,16 @@ def generate_ai_id() -> str:
 
 
 def get_random_name(existing_names: list[str]) -> str:
-    """Get a random name not already in use."""
-    available = [n for n in AI_NAMES if n not in existing_names]
-    if not available:
-        return f"Player{random.randint(100, 999)}"
-    return random.choice(available)
+    # """Get a random name not already in use."""
+    # available = [n for n in AI_NAMES if n not in existing_names]
+    # if not available:
+    #     return f"Player{random.randint(100, 999)}"
+    # return random.choice(available)
+    for name in AI_NAMES:
+        if name not in existing_names:
+            return name
+    # if all names already taken:
+    return f"Player{random.randint(100, 999)}"
 
 
 def truncate_to_tokens(text: str, max_tokens: int) -> str:
